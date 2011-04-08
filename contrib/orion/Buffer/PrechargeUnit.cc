@@ -1,5 +1,6 @@
 #include "PrechargeUnit.h"
 
+#include <cstdio>
 #include "TechParameter.h"
 #include "SRAM.h"
 

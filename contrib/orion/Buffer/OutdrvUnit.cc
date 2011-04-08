@@ -1,5 +1,6 @@
 #include "OutdrvUnit.h"
 
+#include <cstdio>
 #include "TechParameter.h"
 #include "SRAM.h"
 #include "Util.h"

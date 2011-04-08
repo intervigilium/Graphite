@@ -4,6 +4,7 @@
 #include "fixed_types.h"
 #include <assert.h>
 #include <stdlib.h>
+#include <cstdio>
 #include <sstream>
 #include <iostream>
 #include <vector>

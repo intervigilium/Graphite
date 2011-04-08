@@ -1,5 +1,6 @@
 #include "BitlineUnit.h"
 
+#include <cstdio>
 #include "SRAM.h"
 #include "TechParameter.h"
 
