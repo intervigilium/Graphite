@@ -3,8 +3,8 @@ using namespace std;
 
 #include "lite/handle_syscalls.h"
 #include "simulator.h"
-#include "core_manager.h"
-#include "core.h"
+#include "tile_manager.h"
+#include "tile.h"
 #include "syscall_model.h"
 #include "log.h"
 
@@ -39,21 +39,24 @@ void handleFutexSyscall(CONTEXT* ctx)
    args.arg5 = PIN_GetContextReg (ctx, LEVEL_BASE::REG_R9);
 #endif
 
-   Core* core = Sim()->getCoreManager()->getCurrentCore();
+   Core* core = Sim()->getTileManager()->getCurrentCore();
    
    LOG_ASSERT_ERROR(core != NULL, "Core(NULL)");
-   LOG_PRINT("syscall_number %d", syscall_number);
 
+   LOG_PRINT("Enter Syscall (202)");
+   
    core->getSyscallMdl()->runEnter(syscall_number, args);
 }
 
 void syscallEnterRunModel(THREADID threadIndex, CONTEXT* ctx, SYSCALL_STANDARD syscall_standard, void* v)
 {
-   Core* core = Sim()->getCoreManager()->getCurrentCore();
+   Core* core = Sim()->getTileManager()->getCurrentCore();
    LOG_ASSERT_ERROR(core, "Core(NULL)");
 
    IntPtr syscall_number = PIN_GetSyscallNumber(ctx, syscall_standard);
-   LOG_PRINT("Syscall Number(%d)", syscall_number);
+   
+   if (syscall_number != SYS_futex)
+      LOG_PRINT("Enter Syscall(%i)", (int) syscall_number);
 
    // Save the syscall number
    core->getSyscallMdl()->saveSyscallNumber(syscall_number);
@@ -65,18 +68,21 @@ void syscallEnterRunModel(THREADID threadIndex, CONTEXT* ctx, SYSCALL_STANDARD s
 
 void syscallExitRunModel(THREADID threadIndex, CONTEXT* ctx, SYSCALL_STANDARD syscall_standard, void* v)
 {
-   Core* core = Sim()->getCoreManager()->getCurrentCore();
+   Core* core = Sim()->getTileManager()->getCurrentCore();
    LOG_ASSERT_ERROR(core, "Core(NULL)");
 
    IntPtr syscall_number = core->getSyscallMdl()->retrieveSyscallNumber();
+   IntPtr syscall_return = PIN_GetSyscallReturn(ctx, syscall_standard);
+
    if (syscall_number == SYS_futex)
    {
-      IntPtr old_return_val = PIN_GetSyscallReturn (ctx, syscall_standard);
-      IntPtr syscall_return = core->getSyscallMdl()->runExit(old_return_val);
+      IntPtr old_return_val = syscall_return;
+      syscall_return = core->getSyscallMdl()->runExit(old_return_val);
       PIN_SetContextReg(ctx, REG_GAX, syscall_return);
 
-      LOG_PRINT("Syscall(%p) returned (%p)", syscall_number, syscall_return);
    }
+
+   LOG_PRINT("Exit Syscall(%i) - Return Value(%#llx)", (int) syscall_number, (long long unsigned int) syscall_return);
 }
 
 }

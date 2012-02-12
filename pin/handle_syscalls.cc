@@ -3,11 +3,11 @@
 #include "syscall_model.h"
 #include "simulator.h"
 #include "core.h"
-#include "core_manager.h"
+#include "tile_manager.h"
+#include <syscall.h>
 #include "redirect_memory.h"
 #include "vm_manager.h"
 
-#include <syscall.h>
 // ----------------------------
 // Here to handle rt_sigaction syscall
 #include <signal.h>
@@ -96,8 +96,7 @@ VOID handleFutexSyscall(CONTEXT *ctx)
    args.arg4 = PIN_GetContextReg (ctx, LEVEL_BASE::REG_R8);
    args.arg5 = PIN_GetContextReg (ctx, LEVEL_BASE::REG_R9);
 #endif
-
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    
    string core_null = core ? "CORE != NULL" : "CORE == NULL";
    LOG_PRINT("syscall_number %d, %s", syscall_number, core_null.c_str());
@@ -109,10 +108,11 @@ VOID handleFutexSyscall(CONTEXT *ctx)
 
 void syscallEnterRunModel(THREADID threadIndex, CONTEXT *ctx, SYSCALL_STANDARD syscall_standard, void* v)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    IntPtr syscall_number = PIN_GetSyscallNumber (ctx, syscall_standard);
    
    string core_null = core ? "CORE != NULL" : "CORE == NULL";
+
    LOG_PRINT("syscall_number %d, %s", syscall_number, core_null.c_str());
 
    if (core)
@@ -127,6 +127,8 @@ void syscallEnterRunModel(THREADID threadIndex, CONTEXT *ctx, SYSCALL_STANDARD s
             (syscall_number == SYS_close) ||
             (syscall_number == SYS_lseek) ||
             (syscall_number == SYS_access) ||
+            (syscall_number == SYS_rmdir) ||
+            (syscall_number == SYS_unlink) ||
 #ifdef TARGET_X86_64
             (syscall_number == SYS_stat) ||
             (syscall_number == SYS_fstat) ||
@@ -274,7 +276,7 @@ void syscallEnterRunModel(THREADID threadIndex, CONTEXT *ctx, SYSCALL_STANDARD s
 
 void syscallExitRunModel(THREADID threadIndex, CONTEXT *ctx, SYSCALL_STANDARD syscall_standard, void* v)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    
    if (core)
    {
@@ -287,6 +289,8 @@ void syscallExitRunModel(THREADID threadIndex, CONTEXT *ctx, SYSCALL_STANDARD sy
             (syscall_number == SYS_close) ||
             (syscall_number == SYS_lseek) ||
             (syscall_number == SYS_access) ||
+            (syscall_number == SYS_rmdir) ||
+            (syscall_number == SYS_unlink) ||
 #ifdef TARGET_X86_64
             (syscall_number == SYS_stat) ||
             (syscall_number == SYS_fstat) ||
@@ -436,7 +440,7 @@ void contextChange (THREADID threadIndex, CONTEXT_CHANGE_REASON context_change_r
       // the simulated stack
       if (esp_to != esp_from)
       {
-         Core *core = Sim()->getCoreManager()->getCurrentCore();
+         Core *core = Sim()->getTileManager()->getCurrentCore();
          if (core)
          {
             core->accessMemory (Core::NONE, Core::WRITE, esp_to, (char*) esp_to, esp_from - esp_to);
@@ -458,7 +462,7 @@ void contextChange (THREADID threadIndex, CONTEXT_CHANGE_REASON context_change_r
 
 void modifyRtsigprocmaskContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    if (core)
    {
       SyscallMdl::syscall_args_t args = syscallArgs (ctxt, syscall_standard);
@@ -483,7 +487,7 @@ void modifyRtsigprocmaskContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standar
 
 void restoreRtsigprocmaskContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    if (core)
    {
       SyscallMdl::syscall_args_t args;
@@ -501,7 +505,7 @@ void restoreRtsigprocmaskContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standa
 
 void modifyRtsigsuspendContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    if (core)
    {
       SyscallMdl::syscall_args_t args = syscallArgs (ctxt, syscall_standard);
@@ -518,7 +522,7 @@ void modifyRtsigsuspendContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard
 
 void restoreRtsigsuspendContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    if (core)
    {
       SyscallMdl::syscall_args_t args;
@@ -531,7 +535,7 @@ void restoreRtsigsuspendContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standar
 
 void modifyRtsigactionContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    if (core)
    {
       SyscallMdl::syscall_args_t args = syscallArgs (ctxt, syscall_standard);
@@ -556,7 +560,7 @@ void modifyRtsigactionContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 
 void restoreRtsigactionContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    if (core)
    {
       SyscallMdl::syscall_args_t args;
@@ -577,7 +581,7 @@ void restoreRtsigactionContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard
 
 void modifyNanosleepContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore ();
+   Core *core = Sim()->getTileManager()->getCurrentCore ();
    if (core)
    {
       SyscallMdl::syscall_args_t args = syscallArgs (ctxt, syscall_standard);
@@ -602,7 +606,7 @@ void modifyNanosleepContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 
 void restoreNanosleepContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    if (core)
    {
       SyscallMdl::syscall_args_t args;
@@ -623,7 +627,7 @@ void restoreNanosleepContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 
 void modifyUnameContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    if (core)
    {
       SyscallMdl::syscall_args_t args = syscallArgs (ctxt, syscall_standard);
@@ -641,7 +645,7 @@ void modifyUnameContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 
 void restoreUnameContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    if (core)
    {
       SyscallMdl::syscall_args_t args;
@@ -659,7 +663,7 @@ void restoreUnameContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 
 void modifySet_thread_areaContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    if (core)
    {
       SyscallMdl::syscall_args_t args = syscallArgs (ctxt, syscall_standard);
@@ -677,7 +681,7 @@ void modifySet_thread_areaContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_stand
 
 void restoreSet_thread_areaContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    if (core)
    {
       SyscallMdl::syscall_args_t args;
@@ -695,7 +699,7 @@ void restoreSet_thread_areaContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_stan
 
 void modifyCloneContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    if (core)
    {
       SyscallMdl::syscall_args_t args = syscallArgs (ctxt, syscall_standard);
@@ -753,7 +757,7 @@ void modifyCloneContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 
 void restoreCloneContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    if (core)
    {
       SyscallMdl::syscall_args_t args;
@@ -794,7 +798,7 @@ void restoreCloneContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 
 void modifyTimeContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    if (core)
    {
       SyscallMdl::syscall_args_t args = syscallArgs (ctxt, syscall_standard);
@@ -812,7 +816,7 @@ void modifyTimeContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 
 void restoreTimeContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    if (core)
    {
       SyscallMdl::syscall_args_t args;
@@ -830,7 +834,7 @@ void restoreTimeContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 
 void modifyGettimeofdayContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    if (core)
    {
       SyscallMdl::syscall_args_t args = syscallArgs (ctxt, syscall_standard);
@@ -855,7 +859,7 @@ void modifyGettimeofdayContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard
 
 void restoreGettimofdayContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    if (core)
    {
       SyscallMdl::syscall_args_t args;
@@ -880,7 +884,7 @@ void restoreGettimofdayContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard
 
 void modifyGetrlimitContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    if (core)
    {
       SyscallMdl::syscall_args_t args = syscallArgs (ctxt, syscall_standard);
@@ -898,7 +902,7 @@ void modifyGetrlimitContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 
 void restoreGetrlimitContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    if (core)
    {
       SyscallMdl::syscall_args_t args;
@@ -918,7 +922,7 @@ void restoreGetrlimitContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 
 void modifyArch_prctlContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    if (core)
    {
       SyscallMdl::syscall_args_t args = syscallArgs (ctxt, syscall_standard);
@@ -936,7 +940,7 @@ void modifyArch_prctlContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 
 void restoreArch_prctlContext (CONTEXT *ctxt, SYSCALL_STANDARD syscall_standard)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    if (core)
    {
       SyscallMdl::syscall_args_t args;

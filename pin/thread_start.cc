@@ -7,7 +7,7 @@
 #include "simulator.h"
 #include "fixed_types.h"
 #include "pin_config.h"
-#include "core_manager.h"
+#include "tile_manager.h"
 #include "thread_manager.h"
 #include "thread_support.h"
 
@@ -44,7 +44,7 @@ int spawnThreadSpawner(CONTEXT *ctxt)
 
 VOID copyStaticData(IMG& img)
 {
-   Core* core = Sim()->getCoreManager()->getCurrentCore();
+   Core* core = Sim()->getTileManager()->getCurrentCore();
    LOG_ASSERT_ERROR (core != NULL, "Does not have a valid Core ID");
 
    for (SEC sec = IMG_SecHead(img); SEC_Valid(sec); sec = SEC_Next(sec))
@@ -72,7 +72,7 @@ VOID copyStaticData(IMG& img)
 VOID copyInitialStackData(IntPtr& reg_esp, core_id_t core_id)
 {
    // We should not get core_id for this stack_ptr
-   Core* core = Sim()->getCoreManager()->getCurrentCore();
+   Core* core = Sim()->getTileManager()->getCurrentCore();
    LOG_ASSERT_ERROR (core != NULL, "Does not have a valid Core ID");
 
    // 1) Command Line Arguments
@@ -219,7 +219,7 @@ VOID copySpawnedThreadStackData(IntPtr reg_esp)
    
    UInt32 num_bytes_to_copy = (UInt32) (stack_upper_limit - reg_esp);
 
-   Core* core = Sim()->getCoreManager()->getCurrentCore();
+   Core* core = Sim()->getTileManager()->getCurrentCore();
 
    core->accessMemory(Core::NONE, Core::WRITE, reg_esp, (char*) reg_esp, num_bytes_to_copy);
 
@@ -231,24 +231,26 @@ VOID allocateStackSpace()
    // We should probably get the amount of stack space per thread from a configuration parameter
    // Each process allocates whatever it is responsible for !!
    __attribute(__unused__) UInt32 stack_size_per_core = PinConfig::getSingleton()->getStackSizePerCore();
-   __attribute(__unused__) UInt32 num_cores = Sim()->getConfig()->getNumLocalCores();
+   __attribute(__unused__) UInt32 num_tiles = Sim()->getConfig()->getNumLocalTiles();
    __attribute(__unused__) IntPtr stack_base = PinConfig::getSingleton()->getStackLowerLimit();
 
+
    LOG_PRINT("allocateStackSpace: stack_size_per_core = 0x%x", stack_size_per_core);
-   LOG_PRINT("allocateStackSpace: num_local_cores = %i", num_cores);
+   LOG_PRINT("allocateStackSpace: num_local_cores = %i", num_tiles);
    LOG_PRINT("allocateStackSpace: stack_base = 0x%x", stack_base);
 
    // TODO: Make sure that this is a multiple of the page size 
-   
+
    // mmap() the total amount of memory needed for the stacks
-   LOG_ASSERT_ERROR((mmap((void*) stack_base, stack_size_per_core * num_cores,  PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) == (void*) stack_base),
-         "mmap(%p, %u) failed: Cannot allocate stack on host machine", (void*) stack_base, stack_size_per_core * num_cores);
+   LOG_ASSERT_ERROR((mmap((void*) stack_base, stack_size_per_core * num_tiles,  PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) == (void*) stack_base),
+         "mmap(%p, %u) failed: Cannot allocate stack on host machine", (void*) stack_base, stack_size_per_core * num_tiles);
 }
 
 VOID SimPthreadAttrInitOtherAttr(pthread_attr_t *attr)
 {
    LOG_PRINT ("In SimPthreadAttrInitOtherAttr");
 
+   //tile_id_t tile_id;
    core_id_t core_id;
    
    ThreadSpawnRequest* req = Sim()->getThreadManager()->getThreadSpawnReq();
@@ -256,12 +258,12 @@ VOID SimPthreadAttrInitOtherAttr(pthread_attr_t *attr)
    if (req == NULL)
    {
       // This is the thread spawner
-      core_id = Sim()->getConfig()->getCurrentThreadSpawnerCoreNum();
+      core_id = Sim()->getConfig()->getCurrentThreadSpawnerCoreId();
    }
    else
    {
       // This is an application thread
-      core_id = req->core_id;
+      core_id = (core_id_t) {req->destination.tile_id, req->destination.core_type};
    }
 
    PinConfig::StackAttributes stack_attr;

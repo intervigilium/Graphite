@@ -4,9 +4,9 @@
 
 #include "mcp.h"
 #include "config.h"
-#include "core_manager.h"
+#include "tile_manager.h"
 #include "log.h"
-#include "core.h"
+#include "tile.h"
 #include "simulator.h"
 #include "syscall.h"
 #include "thread_manager.h"
@@ -15,16 +15,15 @@
 using namespace std;
 
 MCP::MCP(Network & network)
-      :
-      m_finished(false),
-      m_network(network),
-      m_MCP_SERVER_MAX_BUFF(256*1024),
-      m_scratch(new char[m_MCP_SERVER_MAX_BUFF]),
-      m_vm_manager(),
-      m_syscall_server(m_network, m_send_buff, m_recv_buff, m_MCP_SERVER_MAX_BUFF, m_scratch),
-      m_sync_server(m_network, m_recv_buff),
-      m_clock_skew_minimization_server(NULL),
-      m_network_model_analytical_server(m_network, m_recv_buff)
+   : m_finished(false)
+   , m_network(network)
+   , m_MCP_SERVER_MAX_BUFF(256*1024)
+   , m_scratch(new char[m_MCP_SERVER_MAX_BUFF])
+   , m_vm_manager()
+   , m_syscall_server(m_network, m_send_buff, m_recv_buff, m_MCP_SERVER_MAX_BUFF, m_scratch)
+   , m_sync_server(m_network, m_recv_buff)
+   , m_clock_skew_minimization_server(NULL)
+   , m_network_model_analytical_server(m_network, m_recv_buff)
 {
    m_clock_skew_minimization_server = ClockSkewMinimizationServer::create(Sim()->getCfg()->getString("clock_skew_minimization/scheme","none"), m_network, m_recv_buff);
 }
@@ -54,7 +53,7 @@ void MCP::processPacket()
 
    m_recv_buff >> msg_type;
 
-   LOG_PRINT("MCP message type(%i), sender(%i)", (SInt32) msg_type, recv_pkt.sender);
+   LOG_PRINT("MCP message type(%i), sender(%i,%i)", (SInt32) msg_type, recv_pkt.sender.tile_id, recv_pkt.sender.core_type);
 
    switch (msg_type)
    {
@@ -90,14 +89,14 @@ void MCP::processPacket()
       break;
 
    case MCP_MESSAGE_BARRIER_INIT:
-      m_sync_server.barrierInit(recv_pkt.sender);
+      m_sync_server.barrierInit(recv_pkt.sender.tile_id);
       break;
    case MCP_MESSAGE_BARRIER_WAIT:
-      m_sync_server.barrierWait(recv_pkt.sender);
+      m_sync_server.barrierWait(recv_pkt.sender.tile_id);
       break;
 
    case MCP_MESSAGE_UTILIZATION_UPDATE:
-      m_network_model_analytical_server.update(recv_pkt.sender);
+      m_network_model_analytical_server.update(recv_pkt.sender.tile_id);
       break;
 
    case MCP_MESSAGE_THREAD_SPAWN_REQUEST_FROM_REQUESTER:
@@ -107,7 +106,7 @@ void MCP::processPacket()
       Sim()->getThreadManager()->masterSpawnThreadReply((ThreadSpawnRequest*)recv_pkt.data);
       break;
    case MCP_MESSAGE_THREAD_EXIT:
-      Sim()->getThreadManager()->masterOnThreadExit(*(core_id_t*)((Byte*)recv_pkt.data+sizeof(msg_type)), recv_pkt.time);
+      Sim()->getThreadManager()->masterOnThreadExit(*(tile_id_t*)((Byte*)recv_pkt.data+sizeof(msg_type)), *(UInt32*)((Byte*)recv_pkt.data+sizeof(msg_type)+sizeof(tile_id_t)), recv_pkt.time);
       break;
 
    case MCP_MESSAGE_THREAD_JOIN_REQUEST:
@@ -120,11 +119,11 @@ void MCP::processPacket()
       break;
 
    case MCP_MESSAGE_RESET_CACHE_COUNTERS:
-      Sim()->getPerfCounterManager()->resetCacheCounters(recv_pkt.sender);
+      Sim()->getPerfCounterManager()->resetCacheCounters(recv_pkt.sender.tile_id);
       break;
 
    case MCP_MESSAGE_DISABLE_CACHE_COUNTERS:
-      Sim()->getPerfCounterManager()->disableCacheCounters(recv_pkt.sender);
+      Sim()->getPerfCounterManager()->disableCacheCounters(recv_pkt.sender.tile_id);
       break;
 
    default:
@@ -141,7 +140,8 @@ void MCP::finish()
    LOG_PRINT("Send MCP quit message");
 
    SInt32 msg_type = MCP_MESSAGE_QUIT;
-   m_network.netSend(Config::getSingleton()->getMCPCoreNum(), MCP_SYSTEM_TYPE, &msg_type, sizeof(msg_type));
+   //m_network.netSend(Config::getSingleton()->getMCPTileNum(), MCP_SYSTEM_TYPE, &msg_type, sizeof(msg_type));
+   m_network.netSend(Config::getSingleton()->getMCPCoreId(), MCP_SYSTEM_TYPE, &msg_type, sizeof(msg_type));
 
    while (!finished())
    {
@@ -154,11 +154,11 @@ void MCP::finish()
 void MCP::run()
 {
    __attribute(__unused__) int tid =  syscall(__NR_gettid);
-   LOG_PRINT("In MCP thread ... initializing thread (%i) with id: %i", (int)tid, Config::getSingleton()->getMCPCoreNum());
+   LOG_PRINT("In MCP thread ... initializing thread (%i) with id: %i", (int)tid, Config::getSingleton()->getMCPTileNum());
 
-   int mcp_core_num = Config::getSingleton()->getMCPCoreNum();
-   Sim()->getCoreManager()->initializeThread(mcp_core_num);
-   Sim()->getCoreManager()->initializeCommId(mcp_core_num);
+   core_id_t mcp_core_id = Config::getSingleton()->getMCPCoreId();
+   Sim()->getTileManager()->initializeThread(mcp_core_id);
+   Sim()->getTileManager()->initializeCommId(mcp_core_id.tile_id);
 
    while (!finished())
    {

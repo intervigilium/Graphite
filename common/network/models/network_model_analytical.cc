@@ -6,8 +6,8 @@
 #include "network_model_analytical_params.h"
 #include "message_types.h"
 #include "config.h"
-#include "core.h"
-#include "performance_model.h"
+#include "tile.h"
+#include "core_model.h"
 #include "transport.h"
 #include "lock.h"
 #include "clock_converter.h"
@@ -21,7 +21,6 @@ using namespace std;
 
 NetworkModelAnalytical::NetworkModelAnalytical(Network *net, SInt32 network_id)
       : NetworkModel(net, network_id)
-      , m_enabled(false)
 {
    getNetwork()->registerCallback(MCP_UTILIZATION_UPDATE_TYPE,
                                   receiveMCPUpdate,
@@ -76,7 +75,7 @@ void NetworkModelAnalytical::routePacket(const NetPacket &pkt,
    // (1) compute latency of packet
    // (2) update utilization
 
-   PerformanceModel *perf = getNetwork()->getCore()->getPerformanceModel();
+   CoreModel *perf = getNetwork()->getTile()->getCurrentCore()->getPerformanceModel();
 
    Hop h;
    h.final_dest = pkt.receiver;
@@ -88,7 +87,8 @@ void NetworkModelAnalytical::routePacket(const NetPacket &pkt,
    nextHops.push_back(h);
 
    if (_params.proc_cost > 0)
-      perf->queueDynamicInstruction(new DynamicInstruction(_params.proc_cost));
+      //perf->queueDynamicInstruction(new DynamicInstruction(_params.proc_cost));
+      perf->queueDynamicInstruction(new DynamicInstruction(0));
    _cyclesProc += _params.proc_cost;
 
    updateUtilization();
@@ -99,11 +99,11 @@ void NetworkModelAnalytical::routePacket(const NetPacket &pkt,
 
 UInt64 NetworkModelAnalytical::computeLatency(const NetPacket &packet)
 {
-   if (!m_enabled)
+   if (!isEnabled())
       return 0;
 
    // self-sends incur no cost
-   if (packet.sender == packet.receiver)
+   if (packet.sender.tile_id == packet.receiver.tile_id)
      return 0;
 
    // We model a unidirectional network with end-around connections
@@ -140,7 +140,7 @@ UInt64 NetworkModelAnalytical::computeLatency(const NetPacket &packet)
    double hops_in_network;   // number of nodes visited
    double Tb;                // latency, without contention
 
-   N = Config::getSingleton()->getTotalCores();
+   N = Config::getSingleton()->getTotalTiles();
    k = pow(N, 1./n);                  // pg 5
    kd = k/2.;                         // pg 5 (note this will be
    // different for different network configurations...say,
@@ -154,8 +154,8 @@ UInt64 NetworkModelAnalytical::computeLatency(const NetPacket &packet)
    // Based on this eqn:
    // node number = x1 + x2 k + x3 k^2 + ... + xn k^(n-1)
    int network_distance = 0;
-   int src = packet.sender;
-   int dest = packet.receiver;
+   int src = packet.sender.tile_id;
+   int dest = packet.receiver.tile_id;
    int ki = (int)k;
    for (int i = 0; i < n; i++)
    {
@@ -237,8 +237,8 @@ void NetworkModelAnalytical::updateUtilization()
    // ** send updates
 
    // don't lock because this is all approximate anyway
-   UInt64 core_time = getNetwork()->getCore()->getPerformanceModel()->getCycleCount();
-   UInt64 elapsed_time = core_time - _localUtilizationLastUpdate;
+   UInt64 tile_time = getNetwork()->getTile()->getCore()->getPerformanceModel()->getCycleCount();
+   UInt64 elapsed_time = tile_time - _localUtilizationLastUpdate;
 
    if (elapsed_time < _params.update_interval)
       return;
@@ -248,7 +248,7 @@ void NetworkModelAnalytical::updateUtilization()
 
    LOG_ASSERT_WARNING(0 <= local_utilization && local_utilization < 1, "Unusual local utilization value: %f", local_utilization);
 
-   _localUtilizationLastUpdate = core_time;
+   _localUtilizationLastUpdate = tile_time;
    _localUtilizationFlitsSent = 0;
 
    // build packet
@@ -258,13 +258,13 @@ void NetworkModelAnalytical::updateUtilization()
    m.msg.model = this;
 
    NetPacket update;
-   update.sender = getNetwork()->getCore()->getId();
-   update.receiver = Config::getSingleton()->getMCPCoreNum();
+   update.sender.tile_id = getNetwork()->getTile()->getId();
+   update.receiver.tile_id = Config::getSingleton()->getMCPTileNum();
    update.length = sizeof(m);
    update.type = MCP_SYSTEM_TYPE;
    update.data = &m;
 
-//   getNetwork()->netSend(update);
+// getNetwork()->netSend(update);
 }
 
 void NetworkModelAnalytical::receiveMCPUpdate(void *obj, NetPacket response)
@@ -276,19 +276,9 @@ void NetworkModelAnalytical::receiveMCPUpdate(void *obj, NetPacket response)
    ScopedLock sl(pr->model->_lock);
 
    LOG_ASSERT_ERROR(!IS_NAN(pr->ut) && 0 <= pr->ut && pr->ut < 1, "Recv'd invalid global utilization value: %f", pr->ut);
-//   fprintf(stderr, "Recv'd global utilization: %f\n", pr->ut);
+// fprintf(stderr, "Recv'd global utilization: %f\n", pr->ut);
 
    pr->model->_globalUtilization = pr->ut;
-}
-
-void NetworkModelAnalytical::enable()
-{
-   m_enabled = true;
-}
-
-void NetworkModelAnalytical::disable()
-{
-   m_enabled = false;
 }
 
 void NetworkModelAnalytical::reset()

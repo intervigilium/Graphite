@@ -1,8 +1,8 @@
 #include "dvfs.h"
 #include "simulator.h"
-#include "core_manager.h"
-#include "core.h"
-#include "performance_model.h"
+#include "tile_manager.h"
+#include "tile.h"
+#include "core_model.h"
 #include "fxsupport.h"
 
 void CarbonGetCoreFrequency(volatile float* frequency)
@@ -10,7 +10,7 @@ void CarbonGetCoreFrequency(volatile float* frequency)
    // Floating Point Save/Restore
    FloatingPointHandler floating_point_handler;
 
-   *frequency = Sim()->getCoreManager()->getCurrentCore()->getPerformanceModel()->getFrequency();
+   *frequency = Sim()->getTileManager()->getCurrentCore()->getPerformanceModel()->getFrequency();
 }
 
 void CarbonSetCoreFrequency(volatile float* frequency)
@@ -19,10 +19,10 @@ void CarbonSetCoreFrequency(volatile float* frequency)
    FloatingPointHandler floating_point_handler;
 
    // Stuff to change
-   // 1) Core Performance Model
+   // 1) Tile Performance Model
    // 2) Shared Memory Performance Model
    // 3) Cache Performance Model
-   Core* core = Sim()->getCoreManager()->getCurrentCore();
-   core->updateInternalVariablesOnFrequencyChange(*frequency);
-   Config::getSingleton()->setCoreFrequency(core->getId(), *frequency);
+   Tile* tile = Sim()->getTileManager()->getCurrentTile();
+   tile->updateInternalVariablesOnFrequencyChange(*frequency);
+   Config::getSingleton()->setCoreFrequency(tile->getCurrentCore()->getCoreId(), *frequency);
 }

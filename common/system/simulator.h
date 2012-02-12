@@ -8,7 +8,7 @@
 class MCP;
 class LCP;
 class Transport;
-class CoreManager;
+class TileManager;
 class Thread;
 class ThreadManager;
 class PerfCounterManager;
@@ -30,7 +30,7 @@ public:
 
    MCP *getMCP() { return m_mcp; }
    LCP *getLCP() { return m_lcp; }
-   CoreManager *getCoreManager() { return m_core_manager; }
+   TileManager *getTileManager() { return m_tile_manager; }
    SimThreadManager *getSimThreadManager() { return m_sim_thread_manager; }
    ThreadManager *getThreadManager() { return m_thread_manager; }
    PerfCounterManager *getPerfCounterManager() { return m_perf_counter_manager; }
@@ -45,6 +45,8 @@ public:
    void startTimer();
    void stopTimer();
    bool finished();
+
+   std::string getGraphiteHome() { return _graphite_home; }
 
 private:
 
@@ -66,7 +68,7 @@ private:
    Config m_config;
    Log m_log;
    Transport *m_transport;
-   CoreManager *m_core_manager;
+   TileManager *m_tile_manager;
    ThreadManager *m_thread_manager;
    PerfCounterManager *m_perf_counter_manager;
    SimThreadManager *m_sim_thread_manager;
@@ -83,6 +85,8 @@ private:
    UInt64 m_shutdown_time;
    
    static config::Config *m_config_file;
+
+   std::string _graphite_home;
 };
 
 __attribute__((unused)) static Simulator *Sim()

@@ -1,14 +1,14 @@
 #include "instruction_modeling.h"
 
 #include "simulator.h"
-#include "performance_model.h"
+#include "core_model.h"
 #include "opcodes.h"
-#include "core_manager.h"
-#include "core.h"
+#include "tile_manager.h"
+#include "tile.h"
 
 void handleBasicBlock(BasicBlock *sim_basic_block)
 {
-   PerformanceModel *prfmdl = Sim()->getCoreManager()->getCurrentCore()->getPerformanceModel();
+   CoreModel *prfmdl = Sim()->getTileManager()->getCurrentCore()->getPerformanceModel();
 
    prfmdl->queueBasicBlock(sim_basic_block);
 
@@ -18,8 +18,8 @@ void handleBasicBlock(BasicBlock *sim_basic_block)
 
 void handleBranch(BOOL taken, ADDRINT target)
 {
-   assert(Sim() && Sim()->getCoreManager() && Sim()->getCoreManager()->getCurrentCore());
-   PerformanceModel *prfmdl = Sim()->getCoreManager()->getCurrentCore()->getPerformanceModel();
+   assert(Sim() && Sim()->getTileManager() && Sim()->getTileManager()->getCurrentTile());
+   CoreModel *prfmdl = Sim()->getTileManager()->getCurrentCore()->getPerformanceModel();
 
    DynamicInstructionInfo info = DynamicInstructionInfo::createBranchInfo(taken, target);
    prfmdl->pushDynamicInstructionInfo(info);

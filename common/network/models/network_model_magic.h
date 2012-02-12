@@ -2,21 +2,11 @@
 #define NETWORK_MODEL_MAGIC_H
 
 #include "network.h"
-#include "core.h"
+#include "tile.h"
 #include "lock.h"
 
 class NetworkModelMagic : public NetworkModel
 {
-   private:
-      bool _enabled;
-     
-      Lock _lock;
-
-      UInt64 _num_packets;
-      UInt64 _num_bytes;
-
-      void initializePerformanceCounters();
-
    public:
       NetworkModelMagic(Network *net, SInt32 network_id);
       ~NetworkModelMagic();
@@ -29,14 +19,12 @@ class NetworkModelMagic : public NetworkModel
 
       void outputSummary(std::ostream &out);
 
-      void enable()
-      { _enabled = true; }
+      void reset() {}
+   
+   private:
+      Lock _lock;
 
-      void disable()
-      { _enabled = false; }
-
-      void reset()
-      { initializePerformanceCounters(); }
+      UInt32 getFlitWidth() { return 1; }
 };
 
 #endif /* NETWORK_MODEL_MAGIC_H */

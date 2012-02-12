@@ -6,8 +6,8 @@ using std::vector;
 
 #include "pin.H"
 #include "simulator.h"
-#include "core_manager.h"
-#include "core.h"
+#include "tile_manager.h"
+#include "tile.h"
 #include "progress_trace.h"
 
 static UInt64 applicationStartTime;
@@ -31,10 +31,10 @@ static UInt64 getTime()
 
 static FILE* getFileDescriptor()
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
-   core_id_t id = core->getId();
+   Tile *tile = Sim()->getTileManager()->getCurrentTile();
+   tile_id_t id = tile->getId();
 
-   if (!core) return NULL;
+   if (!tile) return NULL;
 
    FILE *f = files[id];
 
@@ -55,7 +55,7 @@ static VOID traceProgress()
    UInt64* counter_ptr = (UInt64*) PIN_GetThreadData(threadCounterKey);
    UInt64 counter = *counter_ptr;
 
-   PerformanceModel *pm = Sim()->getCoreManager()->getCurrentCore()->getPerformanceModel();
+   CoreModel *pm = Sim()->getTileManager()->getCurrentCore()->getPerformanceModel();
 
    UInt64 cycles = pm->getCycleCount();
 
@@ -95,7 +95,7 @@ VOID initProgressTrace()
 
    applicationStartTime = getTime();
 
-   files.resize(Sim()->getConfig()->getTotalCores());
+   files.resize(Sim()->getConfig()->getTotalTiles());
    for (unsigned int i = 0; i < files.size(); i++)
       files[i] = NULL;
 

@@ -4,6 +4,7 @@
 #include <sys/syscall.h>
 #include <linux/futex.h>
 #include <limits.h>
+#include "log.h"
 
 ConditionVariable::ConditionVariable()
    : m_futx(0)
@@ -25,7 +26,9 @@ void ConditionVariable::wait(Lock& lock)
 
    lock.release();
 
+   LOG_PRINT("Sleeping on m_futx(0x%x)",&m_futx);
    syscall(SYS_futex, (void*) &m_futx, FUTEX_WAIT, 0, NULL, NULL, 0);
+   LOG_PRINT("Woke on m_futx(0x%x)",&m_futx);
 
    lock.acquire();
 }

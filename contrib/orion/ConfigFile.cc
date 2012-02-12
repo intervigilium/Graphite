@@ -8,6 +8,7 @@ ConfigFile::ConfigFile( string filename, string delimiter,
                         string comment, string sentry )
 	: myDelimiter(delimiter), myComment(comment), mySentry(sentry)
 {
+
 	// Construct a ConfigFile, getting keys and values from given file
 	std::ifstream in( filename.c_str() );
 	

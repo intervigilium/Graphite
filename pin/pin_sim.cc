@@ -28,9 +28,9 @@
 
 // FIXME: This list could probably be trimmed down a lot.
 #include "simulator.h"
-#include "core_manager.h"
+#include "tile_manager.h"
 #include "config.h"
-#include "core.h"
+#include "tile.h"
 #include "syscall_model.h"
 #include "thread_manager.h"
 #include "config_file.hpp"
@@ -40,6 +40,7 @@
 #include "log.h"
 #include "vm_manager.h"
 #include "instruction_modeling.h"
+#include "instruction_cache_modeling.h"
 #include "progress_trace.h"
 #include "clock_skew_minimization.h"
 
@@ -163,25 +164,9 @@ void routineCallback(RTN rtn, void *v)
    }
 }
 
-void showInstructionInfo(INS ins)
-{
-   if (Sim()->getCoreManager()->getCurrentCore()->getId() != 0)
-      return;
-   printf("\t");
-   if (INS_IsMemoryRead(ins) || INS_IsMemoryWrite(ins))
-      printf("* ");
-   else
-      printf("  ");
-//   printf("%d - %s ", INS_Category(ins), CATEGORY_StringShort(INS_Category(ins)).c_str());
-   printf("%x - %s ", INS_Opcode(ins), OPCODE_StringShort(INS_Opcode(ins)).c_str());
-   printf(" %s ", INS_Disassemble(ins).c_str());
-   printf("\n");
-}
-
 VOID instructionCallback (INS ins, void *v)
 {
-   // Debugging Functions
-   // showInstructionInfo(ins);
+   // Debugging Function
    if (Log::getSingleton()->isLoggingEnabled())
    {
       INS_InsertCall(ins, IPOINT_BEFORE,
@@ -191,9 +176,13 @@ VOID instructionCallback (INS ins, void *v)
             IARG_END);
    }
 
-   // Core Performance Modeling
    if (Config::getSingleton()->getEnablePerformanceModeling())
+   {
+      // Core Performance Modeling
       addInstructionModeling(ins);
+      // Add I-cache modeling call
+      addInstructionCacheModeling(ins);
+   }
 
    // Progress Trace
    addProgressTrace(ins);
@@ -220,6 +209,7 @@ VOID instructionCallback (INS ins, void *v)
    }
    else // Sim()->getConfig()->getSimulationMode() == Config::LITE
    {
+      // Special handling for futex syscall because of internal Pin lock
       if (INS_IsSyscall(ins))
       {
          INS_InsertCall(ins, IPOINT_BEFORE,
@@ -263,12 +253,13 @@ VOID threadStartCallback(THREADID threadIndex, CONTEXT *ctxt, INT32 flags, VOID 
 
    if (! done_app_initialization)
    {
+      // The app is not initialized, start the main thread on the main core on tile 0.
       UInt32 curr_process_num = Sim()->getConfig()->getCurrentProcessNum();
 
       if (Sim()->getConfig()->getSimulationMode() == Config::LITE)
       {
          LOG_ASSERT_ERROR(curr_process_num == 0, "Lite mode can only be run with 1 process");
-         Sim()->getCoreManager()->initializeThread(0);
+         Sim()->getTileManager()->initializeThread(Sim()->getTileManager()->getMainCoreId(0));
       }
       else // Sim()->getConfig()->getSimulationMode() == Config::FULL
       { 
@@ -277,7 +268,7 @@ VOID threadStartCallback(THREADID threadIndex, CONTEXT *ctxt, INT32 flags, VOID 
          
          if (curr_process_num == 0)
          {
-            Sim()->getCoreManager()->initializeThread(0);
+            Sim()->getTileManager()->initializeThread(Sim()->getTileManager()->getMainCoreId(0));
 
             ADDRINT reg_eip = PIN_GetContextReg(ctxt, REG_INST_PTR);
             // 1) Copying over Static Data
@@ -292,24 +283,24 @@ VOID threadStartCallback(THREADID threadIndex, CONTEXT *ctxt, INT32 flags, VOID 
 
             // 2) Copying over initial stack data
             LOG_PRINT("Process: 0, Start Copying Initial Stack Data");
-            copyInitialStackData(reg_esp, 0);
+            copyInitialStackData(reg_esp, Sim()->getTileManager()->getMainCoreId(0));
             LOG_PRINT("Process: 0, Finished Copying Initial Stack Data");
          }
          else
          {
-            core_id_t core_id = Sim()->getConfig()->getCurrentThreadSpawnerCoreNum();
-            Sim()->getCoreManager()->initializeThread(core_id);
+            tile_id_t tile_id = Sim()->getConfig()->getCurrentThreadSpawnerTileNum();
+            Sim()->getTileManager()->initializeThread(Sim()->getTileManager()->getMainCoreId(tile_id));
             
-            Core *core = Sim()->getCoreManager()->getCurrentCore();
+            Tile *tile = Sim()->getTileManager()->getCurrentTile();
 
             // main thread clock is not affected by start-up time of other processes
-            core->getNetwork()->netRecv (0, SYSTEM_INITIALIZATION_NOTIFY);
+            //tile->getNetwork()->netRecv (0, SYSTEM_INITIALIZATION_NOTIFY);
+            tile->getNetwork()->netRecv (Sim()->getTileManager()->getMainCoreId(0), SYSTEM_INITIALIZATION_NOTIFY);
 
             LOG_PRINT("Process: %i, Start Copying Initial Stack Data");
-            copyInitialStackData(reg_esp, core_id);
+            copyInitialStackData(reg_esp, Sim()->getTileManager()->getMainCoreId(tile_id));
             LOG_PRINT("Process: %i, Finished Copying Initial Stack Data");
          }
-
          // Set the current ESP accordingly
          PIN_SetContextReg(ctxt, REG_STACK_PTR, reg_esp);
       }
@@ -329,21 +320,25 @@ VOID threadStartCallback(THREADID threadIndex, CONTEXT *ctxt, INT32 flags, VOID 
          Sim()->getThreadManager()->getThreadToSpawn(&req);
          Sim()->getThreadManager()->dequeueThreadSpawnReq(&req);
 
-         LOG_ASSERT_ERROR(req.core_id < SInt32(Config::getSingleton()->getApplicationCores()),
-               "req.core_id(%i), num application cores(%u)", req.core_id, Config::getSingleton()->getApplicationCores());
+         LOG_ASSERT_ERROR(req.destination.tile_id < SInt32(Config::getSingleton()->getApplicationTiles()),
+               "req.tile_id(%i), num application cores(%u)", req.destination.tile_id, Config::getSingleton()->getApplicationTiles());
          Sim()->getThreadManager()->onThreadStart(&req);
       }
       else // Sim()->getConfig()->getSimulationMode() == Config::FULL
       {
          ADDRINT reg_esp = PIN_GetContextReg(ctxt, REG_STACK_PTR);
+         tile_id_t tile_id = PinConfig::getSingleton()->getTileIDFromStackPtr(reg_esp);
+         LOG_PRINT("Got tile %d from stack ptr 0x%x", tile_id, reg_esp);
+
          core_id_t core_id = PinConfig::getSingleton()->getCoreIDFromStackPtr(reg_esp);
+         LOG_PRINT("Got core {%d, %d} from stack ptr 0x%x", core_id.tile_id, core_id.core_type, reg_esp);
 
-         LOG_ASSERT_ERROR(core_id != -1, "All application threads and thread spawner are cores now");
+         LOG_ASSERT_ERROR(tile_id != -1, "All application threads and thread spawner are cores now");
 
-         if (core_id == Sim()->getConfig()->getCurrentThreadSpawnerCoreNum())
+         if (tile_id == Sim()->getConfig()->getCurrentThreadSpawnerTileNum())
          {
             // 'Thread Spawner' thread
-            Sim()->getCoreManager()->initializeThread(core_id);
+            Sim()->getTileManager()->initializeThread(core_id);
          }
          else
          {
@@ -353,7 +348,7 @@ VOID threadStartCallback(THREADID threadIndex, CONTEXT *ctxt, INT32 flags, VOID 
             LOG_ASSERT_ERROR (req != NULL, "ThreadSpawnRequest is NULL !!");
 
             // This is an application thread
-            LOG_ASSERT_ERROR(core_id == req->core_id, "Got 2 different core_ids: req->core_id = %i, core_id = %i", req->core_id, core_id);
+            LOG_ASSERT_ERROR(tile_id == req->destination.tile_id, "Got 2 different tile_ids: req->destination = {%i, %i}, tile_id = %i", req->destination.tile_id, req->destination.core_type, tile_id);
 
             Sim()->getThreadManager()->onThreadStart(req);
          }
@@ -371,11 +366,11 @@ VOID threadStartCallback(THREADID threadIndex, CONTEXT *ctxt, INT32 flags, VOID 
          PIN_SetContextReg (ctxt, LEVEL_BASE::REG_R10, (ADDRINT) child_tidptr);
 #endif
 
-         __attribute(__unused__) Core *core = Sim()->getCoreManager()->getCurrentCore();
-         LOG_ASSERT_ERROR(core, "core(NULL)");
+         __attribute(__unused__) Tile *tile = Sim()->getTileManager()->getCurrentTile();
+         LOG_ASSERT_ERROR(tile, "tile(NULL)");
 
          // Copy over thread stack data
-         // copySpawnedThreadStackData(reg_esp);
+         //copySpawnedThreadStackData(reg_esp);
 
          // Wait to make sure that the spawner has written stuff back to memory
          // FIXME: What is this for(?) This seems arbitrary
@@ -433,7 +428,7 @@ int main(int argc, char *argv[])
    PIN_AddThreadStartFunction(threadStartCallback, 0);
    PIN_AddThreadFiniFunction(threadFiniCallback, 0);
    
-   if (cfg->getBool("general/enable_syscall_modeling"))
+   if ((cfg->getBool("general/enable_syscall_modeling")))
    {
       if (Sim()->getConfig()->getSimulationMode() == Config::FULL)
       {
@@ -455,7 +450,7 @@ int main(int argc, char *argv[])
 
    PIN_AddFiniFunction(ApplicationExit, 0);
 
-   // Just in case ... might not be strictly necessary
+   //Just in case ... might not be strictly necessary
    Transport::getSingleton()->barrier();
 
    // Never returns

@@ -15,7 +15,7 @@
 class SimMutex
 {
    public:
-      static const core_id_t NO_OWNER = UINT_MAX;
+      //static const core_id_t NO_OWNER = (core_id_t) {UINT_MAX, UINT_MAX};
 
       SimMutex();
       ~SimMutex();
@@ -66,17 +66,17 @@ class SimCond
 class SimBarrier
 {
    public:
-      typedef std::vector<core_id_t> WakeupList;
+      typedef std::vector<tile_id_t> WakeupList;
 
       SimBarrier(UInt32 count);
       ~SimBarrier();
 
       // returns a list of threads to wake up if all have reached barrier
-      void wait(core_id_t core_id, UInt64 time, WakeupList &woken);
+      void wait(tile_id_t tile_id, UInt64 time, WakeupList &woken);
       UInt64 getMaxTime() { return m_max_time; }
 
    private:
-      typedef std::vector< core_id_t > ThreadQueue;
+      typedef std::vector< tile_id_t > ThreadQueue;
       ThreadQueue m_waiting;
 
       UInt32 m_count;
@@ -101,17 +101,17 @@ class SyncServer
 
       // Remaining parameters to these functions are stored
       // in the recv buffer and get unpacked
-      void mutexInit(core_id_t);
-      void mutexLock(core_id_t);
-      void mutexUnlock(core_id_t);
+      void mutexInit(core_id_t core_id);
+      void mutexLock(core_id_t core_id);
+      void mutexUnlock(core_id_t core_id);
 
-      void condInit(core_id_t);
-      void condWait(core_id_t);
-      void condSignal(core_id_t);
-      void condBroadcast(core_id_t);
+      void condInit(core_id_t core_id);
+      void condWait(core_id_t core_id);
+      void condSignal(core_id_t core_id);
+      void condBroadcast(core_id_t core_id);
 
-      void barrierInit(core_id_t);
-      void barrierWait(core_id_t);
+      void barrierInit(tile_id_t);
+      void barrierWait(tile_id_t);
 
    private:
       Network &m_network;

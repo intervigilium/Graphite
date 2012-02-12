@@ -20,10 +20,21 @@ typedef uintptr_t IntPtr;
 
 typedef uintptr_t carbon_reg_t;
 
-// Carbon core types
-typedef SInt32 core_id_t;
+// The core_type_t enum allows you to add additional cores per tile.
+// To do so, add a class that derives from the Core class, and instantiate it from the Tile constructor.
+typedef enum core_type_t { MAIN_CORE_TYPE = 0 } core_type_t;
 
-#define INVALID_CORE_ID ((core_id_t) -1)
-#define INVALID_ADDRESS  ((IntPtr) -1)
+// Cores are labeled by core_id_t, which identify the tile that contains them, and their type. 
+typedef SInt32 tile_id_t;
+
+typedef struct {
+   tile_id_t tile_id;
+   UInt32 core_type;
+} core_id_t;
+
+#define INVALID_TILE_ID ((tile_id_t) -1)
+#define INVALID_CORE_ID ((core_id_t) {INVALID_TILE_ID, MAIN_CORE_TYPE})
+#define INVALID_ADDRESS ((IntPtr) -1)
+
 
 #endif

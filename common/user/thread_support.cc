@@ -5,8 +5,8 @@
 #include <pthread.h>
 #include "simulator.h"
 #include "thread_manager.h"
-#include "core_manager.h"
-#include "core.h"
+#include "tile_manager.h"
+#include "tile.h"
 #include "config_file.hpp"
 #include "carbon_user.h"
 #include "thread_support_private.h"
@@ -95,7 +95,8 @@ int CarbonSpawnThreadSpawner()
 // This function will spawn threads provided by the sim
 void *CarbonThreadSpawner(void *)
 {
-   ThreadSpawnRequest req = {-1, NULL, NULL, -1, Sim()->getConfig()->getCurrentThreadSpawnerCoreNum() };
+   //ThreadSpawnRequest req = {-1, NULL, NULL, -1, Sim()->getConfig()->getCurrentThreadSpawnerTileNum() };
+   ThreadSpawnRequest req = {-1, NULL, NULL, INVALID_CORE_ID, Sim()->getConfig()->getCurrentThreadSpawnerCoreId()};
 
    CarbonThreadStart (&req);
 

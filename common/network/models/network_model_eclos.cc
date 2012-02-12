@@ -3,14 +3,11 @@
 #include "network_model_eclos.h"
 #include "simulator.h"
 #include "config.h"
-#include "core.h"
-#include "clock_converter.h"
-#include "memory_manager_base.h"
+#include "tile.h"
 #include "log.h"
 
 NetworkModelEClos::NetworkModelEClos(Network* network, SInt32 network_id):
-   NetworkModel(network, network_id),
-   _enabled(false)
+   NetworkModel(network, network_id)
 {
    readTopologyParams(_m, _n, _r);
    
@@ -44,10 +41,10 @@ NetworkModelEClos::NetworkModelEClos(Network* network, SInt32 network_id):
       LOG_PRINT_ERROR("Unable to read EClos network parameters from cfg file");
    }
 
-   core_id_t core_id = getNetwork()->getCore()->getId(); 
+   tile_id_t tile_id = getNetwork()->getTile()->getId(); 
 
-   // Create the EClos router to core mapping
-   _eclos_router_to_core_mapping.resize(NUM_ROUTER_STAGES);
+   // Create the EClos router to tile mapping
+   _eclos_router_to_tile_mapping.resize(NUM_ROUTER_STAGES);
    // Create the EClos Node Models
    _eclos_node_list.resize(NUM_ROUTER_STAGES);
    for (SInt32 i = 0; i < NUM_ROUTER_STAGES; i++)
@@ -56,14 +53,14 @@ NetworkModelEClos::NetworkModelEClos(Network* network, SInt32 network_id):
    // INGRESS_ROUTER
    for (SInt32 i = 0; i < _n; i++)
    {
-      _eclos_router_to_core_mapping[INGRESS_ROUTER].push_back(i * _m);
+      _eclos_router_to_tile_mapping[INGRESS_ROUTER].push_back(i * _m);
    }
   
-   if (find(_eclos_router_to_core_mapping[INGRESS_ROUTER].begin(),
-            _eclos_router_to_core_mapping[INGRESS_ROUTER].end(),
-            core_id) != _eclos_router_to_core_mapping[INGRESS_ROUTER].end())
+   if (find(_eclos_router_to_tile_mapping[INGRESS_ROUTER].begin(),
+            _eclos_router_to_tile_mapping[INGRESS_ROUTER].end(),
+            tile_id) != _eclos_router_to_tile_mapping[INGRESS_ROUTER].end())
    {
-      _eclos_node_list[INGRESS_ROUTER] = new EClosNode(core_id / _m,
+      _eclos_node_list[INGRESS_ROUTER] = new EClosNode(tile_id / _m,
             _m, _r,
             _flit_width, _frequency,
             num_flits_per_output_port, _router_delay,
@@ -72,18 +69,18 @@ NetworkModelEClos::NetworkModelEClos(Network* network, SInt32 network_id):
    }
 
    // MIDDLE_ROUTER
-   SInt32 N = Config::getSingleton()->getApplicationCores();
+   SInt32 N = Config::getSingleton()->getApplicationTiles();
    assert(N == (_m * _n));
    for (SInt32 i = 0; i < _r; i++)
    {
-      _eclos_router_to_core_mapping[MIDDLE_ROUTER].push_back( (i * (N/_r)) + 1);
+      _eclos_router_to_tile_mapping[MIDDLE_ROUTER].push_back( (i * (N/_r)) + 1);
    }
 
-   if (find(_eclos_router_to_core_mapping[MIDDLE_ROUTER].begin(),
-            _eclos_router_to_core_mapping[MIDDLE_ROUTER].end(),
-            core_id) != _eclos_router_to_core_mapping[MIDDLE_ROUTER].end())
+   if (find(_eclos_router_to_tile_mapping[MIDDLE_ROUTER].begin(),
+            _eclos_router_to_tile_mapping[MIDDLE_ROUTER].end(),
+            tile_id) != _eclos_router_to_tile_mapping[MIDDLE_ROUTER].end())
    {
-      _eclos_node_list[MIDDLE_ROUTER] = new EClosNode((core_id - 1) / (N/_r),
+      _eclos_node_list[MIDDLE_ROUTER] = new EClosNode((tile_id - 1) / (N/_r),
             _n, _n,
             _flit_width, _frequency,
             num_flits_per_output_port, _router_delay,
@@ -94,14 +91,14 @@ NetworkModelEClos::NetworkModelEClos(Network* network, SInt32 network_id):
    // EGRESS_ROUTER
    for (SInt32 i = 0; i < _n; i++)
    {
-      _eclos_router_to_core_mapping[EGRESS_ROUTER].push_back( (i * _m) + _m-1);
+      _eclos_router_to_tile_mapping[EGRESS_ROUTER].push_back( (i * _m) + _m-1);
    }
 
-   if (find(_eclos_router_to_core_mapping[EGRESS_ROUTER].begin(),
-            _eclos_router_to_core_mapping[EGRESS_ROUTER].end(),
-            core_id) != _eclos_router_to_core_mapping[EGRESS_ROUTER].end())
+   if (find(_eclos_router_to_tile_mapping[EGRESS_ROUTER].begin(),
+            _eclos_router_to_tile_mapping[EGRESS_ROUTER].end(),
+            tile_id) != _eclos_router_to_tile_mapping[EGRESS_ROUTER].end())
    {
-      _eclos_node_list[EGRESS_ROUTER] = new EClosNode((core_id - (_m-1)) / _m,
+      _eclos_node_list[EGRESS_ROUTER] = new EClosNode((tile_id - (_m-1)) / _m,
             _r, _m,
             _flit_width, _frequency,
             num_flits_per_output_port, _router_delay,
@@ -110,13 +107,7 @@ NetworkModelEClos::NetworkModelEClos(Network* network, SInt32 network_id):
    }
 
    // Seed the buffer for random number generation
-   srand48_r(core_id, &_rand_data_buffer);
-
-   // Initialize Performance Counters
-   _total_packets_received = 0;
-   _total_bytes_received = 0;
-   _total_contention_delay = 0;
-   _total_packet_delay = 0;
+   srand48_r(tile_id, &_rand_data_buffer);
 }
 
 NetworkModelEClos::~NetworkModelEClos()
@@ -169,7 +160,7 @@ NetworkModelEClos::routePacket(const NetPacket& pkt, vector<Hop>& next_hops)
             bool further_processing = processCornerCases(pkt, next_hops);
             if (further_processing)
             { 
-               SInt32 ingress_router_idx = pkt.sender / _m;
+               SInt32 ingress_router_idx = pkt.sender.tile_id / _m;
                next_stage = INGRESS_ROUTER;
                next_dest_info_vec.push_back(make_pair<SInt32,UInt64>(ingress_router_idx, _link_delay));
             }
@@ -189,7 +180,7 @@ NetworkModelEClos::routePacket(const NetPacket& pkt, vector<Hop>& next_hops)
 
       case MIDDLE_ROUTER:
          {
-            SInt32 egress_router_idx = (pkt.receiver != NetPacket::BROADCAST) ? (pkt.receiver / _m) : -1;
+            SInt32 egress_router_idx = (pkt.receiver.tile_id != NetPacket::BROADCAST) ? (pkt.receiver.tile_id / _m) : -1;
             next_stage = EGRESS_ROUTER;
 
             EClosNode* eclos_node = _eclos_node_list[MIDDLE_ROUTER];
@@ -200,7 +191,7 @@ NetworkModelEClos::routePacket(const NetPacket& pkt, vector<Hop>& next_hops)
 
       case EGRESS_ROUTER:
          {
-            SInt32 receiving_node_idx = (pkt.receiver != NetPacket::BROADCAST) ? (pkt.receiver % _m) : -1;
+            SInt32 receiving_node_idx = (pkt.receiver.tile_id != NetPacket::BROADCAST) ? (pkt.receiver.tile_id % _m) : -1;
             next_stage = RECEIVING_CORE;
             
             EClosNode* eclos_node = _eclos_node_list[EGRESS_ROUTER];
@@ -222,28 +213,28 @@ NetworkModelEClos::routePacket(const NetPacket& pkt, vector<Hop>& next_hops)
       UInt64 packet_delay = next_dest_info.second;
 
       Hop hop;
-      hop.final_dest = pkt.receiver;
+      hop.final_dest.tile_id = pkt.receiver.tile_id;
       if (next_stage == RECEIVING_CORE)
       {
          SInt32 curr_router_idx = _eclos_node_list[EGRESS_ROUTER]->getRouterIdx();
-         hop.next_dest = (curr_router_idx * _m) + next_router_idx;
+         hop.next_dest.tile_id = (curr_router_idx * _m) + next_router_idx;
       }
       else
       {
-         hop.next_dest = _eclos_router_to_core_mapping[next_stage][next_router_idx];
+         hop.next_dest.tile_id = _eclos_router_to_tile_mapping[next_stage][next_router_idx];
       }
       hop.time = pkt.time + packet_delay;
       hop.specific = next_stage;
       next_hops.push_back(hop);
    }
 
-   LOG_PRINT("Sender(%i), Curr Stage(%s), Curr Core(%i), Time(%llu) -->",
-         pkt.sender, getName(curr_stage).c_str(), getNetwork()->getCore()->getId(), pkt.time);
+   LOG_PRINT("Sender(%i), Curr Stage(%s), Curr Tile(%i), Time(%llu) -->",
+         pkt.sender.tile_id, getName(curr_stage).c_str(), getNetwork()->getTile()->getId(), pkt.time);
    for (UInt32 i = 0; i < next_hops.size(); i++)
    {
-      LOG_PRINT("    --> Receiver(%i), Next Stage(%s), Next Core(%i), Time(%llu)",
-            next_hops[i].final_dest, getName((Stage) next_hops[i].specific).c_str(),
-            next_hops[i].next_dest, next_hops[i].time);
+      LOG_PRINT("    --> Receiver(%i), Next Stage(%s), Next Tile(%i), Time(%llu)",
+            next_hops[i].final_dest.tile_id, getName((Stage) next_hops[i].specific).c_str(),
+            next_hops[i].next_dest.tile_id, next_hops[i].time);
    }
 
 }
@@ -276,7 +267,7 @@ NetworkModelEClos::processReceivedPacket(NetPacket& pkt)
 
    pair<bool,bool> modeled = isModeled(pkt);
    if ( (modeled.first == true) || 
-        ((modeled.second == true) && isApplicationCore(getNetwork()->getCore()->getId())) )
+        ((modeled.second == true) && isApplicationTile(getNetwork()->getTile()->getId())) )
    {
       SInt32 pkt_length = getNetwork()->getModeledLength(pkt);
       SInt32 num_flits = computeProcessingTime(pkt_length);
@@ -286,14 +277,9 @@ NetworkModelEClos::processReceivedPacket(NetPacket& pkt)
       UInt64 zero_load_delay = serialization_delay + 
          NUM_ROUTER_STAGES * _router_delay + 
          (NUM_ROUTER_STAGES + 1) * _link_delay;
-      UInt64 packet_delay = pkt.time - pkt.start_time;
-      UInt64 contention_delay = packet_delay - zero_load_delay;
 
-      // Increment Counters
-      _total_packets_received += 1;
-      _total_bytes_received += pkt_length;
-      _total_contention_delay += contention_delay;
-      _total_packet_delay += packet_delay;
+      // Update Receive Counters
+      updateReceiveCounters(pkt, zero_load_delay);
    }
 }
 
@@ -309,13 +295,13 @@ NetworkModelEClos::processCornerCases(const NetPacket& pkt, vector<Hop>& next_ho
    }
    else if (modeled.second == true)
    {
-      assert(pkt.receiver == NetPacket::BROADCAST);
-      for (UInt32 i = Config::getSingleton()->getApplicationCores();
-            i < Config::getSingleton()->getTotalCores(); i++)
+      assert(pkt.receiver.tile_id == NetPacket::BROADCAST);
+      for (UInt32 i = Config::getSingleton()->getApplicationTiles();
+            i < Config::getSingleton()->getTotalTiles(); i++)
       {
          Hop hop;
-         hop.next_dest = i;
-         hop.final_dest = NetPacket::BROADCAST;
+         hop.next_dest.tile_id = i;
+         hop.final_dest.tile_id = NetPacket::BROADCAST;
          hop.specific = RECEIVING_CORE;
          hop.time = pkt.time;
          next_hops.push_back(hop);
@@ -324,23 +310,23 @@ NetworkModelEClos::processCornerCases(const NetPacket& pkt, vector<Hop>& next_ho
    }
    else // both elements are false
    {
-      if (pkt.receiver == NetPacket::BROADCAST)
+      if (pkt.receiver.tile_id == NetPacket::BROADCAST)
       {
-         for (UInt32 i = 0; i < Config::getSingleton()->getTotalCores(); i++)
+         for (UInt32 i = 0; i < Config::getSingleton()->getTotalTiles(); i++)
          {
             Hop hop;
-            hop.next_dest = i;
-            hop.final_dest = NetPacket::BROADCAST;
+            hop.next_dest.tile_id = i;
+            hop.final_dest.tile_id = NetPacket::BROADCAST;
             hop.specific = RECEIVING_CORE;
             hop.time = pkt.time;
             next_hops.push_back(hop);
          }
       }
-      else // (pkt.receiver != NetPacket::BROADCAST)
+      else // (pkt.receiver.tile_id != NetPacket::BROADCAST)
       {
          Hop hop;
-         hop.next_dest = pkt.receiver;
-         hop.final_dest = pkt.receiver;
+         hop.next_dest.tile_id = pkt.receiver.tile_id;
+         hop.final_dest.tile_id = pkt.receiver.tile_id;
          hop.specific = RECEIVING_CORE;
          hop.time = pkt.time;
          next_hops.push_back(hop);
@@ -353,24 +339,17 @@ pair<bool,bool>
 NetworkModelEClos::isModeled(const NetPacket& pkt)
 {
    // Get the requester first
-   core_id_t requester;
-   SInt32 network_id = getNetworkId();
-   if ((network_id == STATIC_NETWORK_USER_1) || (network_id == STATIC_NETWORK_USER_2))
-      requester = pkt.sender;
-   else if ((network_id == STATIC_NETWORK_MEMORY_1) || (network_id == STATIC_NETWORK_MEMORY_2))
-      requester = getNetwork()->getCore()->getMemoryManager()->getShmemRequester(pkt.data);
-   else // (network_id == STATIC_NETWORK_SYSTEM)
-      requester = INVALID_CORE_ID;
+   tile_id_t requester = getRequester(pkt);
 
-   if (pkt.sender == pkt.receiver)
+   if (TILE_ID(pkt.sender) == TILE_ID(pkt.receiver))
    {
       return make_pair<bool,bool>(false,false);
    }
-   else if (_enabled && isApplicationCore(requester) && isApplicationCore(pkt.sender))
+   else if (isEnabled() && isApplicationTile(requester) && isApplicationTile(TILE_ID(pkt.sender)))
    {
-      if (isApplicationCore(pkt.receiver))
+      if (isApplicationTile(TILE_ID(pkt.receiver)))
          return make_pair<bool,bool>(true, false);
-      else if (pkt.receiver == NetPacket::BROADCAST)
+      else if (TILE_ID(pkt.receiver) == NetPacket::BROADCAST)
          return make_pair<bool,bool>(false, true);
       else
          return make_pair<bool,bool>(false,false);
@@ -382,9 +361,9 @@ NetworkModelEClos::isModeled(const NetPacket& pkt)
 }
 
 bool
-NetworkModelEClos::isApplicationCore(core_id_t core_id)
+NetworkModelEClos::isApplicationTile(tile_id_t tile_id)
 {
-   return ((core_id >= 0) && (core_id < (core_id_t) Config::getSingleton()->getApplicationCores()));
+   return ((tile_id >= 0) && (tile_id < (tile_id_t) Config::getSingleton()->getApplicationTiles()));
 }
 
 SInt32
@@ -404,10 +383,10 @@ NetworkModelEClos::computeProcessingTime(SInt32 pkt_length)
 }
 
 pair<bool,SInt32>
-NetworkModelEClos::computeCoreCountConstraints(SInt32 core_count)
+NetworkModelEClos::computeTileCountConstraints(SInt32 tile_count)
 {
    // Check for m,n,r correctly
-   SInt32 N = Config::getSingleton()->getApplicationCores();
+   SInt32 N = Config::getSingleton()->getApplicationTiles();
    SInt32 m,n,r;
    readTopologyParams(m,n,r);
    if ((N != (m * n)) || (N < r))
@@ -424,31 +403,7 @@ NetworkModelEClos::outputSummary(ostream& out)
 {
    out << " EClos Network: " << endl;
    out << "   Performance Counters: " << endl;
-   out << "    Bytes Received: " << _total_bytes_received << endl;
-   out << "    Packets Received: " << _total_packets_received << endl;
-   if (_total_packets_received > 0)
-   {
-      UInt64 total_contention_delay_in_ns = convertCycleCount(_total_contention_delay, _frequency, 1.0);
-      UInt64 total_packet_delay_in_ns = convertCycleCount(_total_packet_delay, _frequency, 1.0);
-
-      out << "    Average Contention Delay (in clock cycles): " << 
-         ((float) _total_contention_delay / _total_packets_received) << endl;
-      out << "    Average Contention Delay (in ns): " << 
-         ((float) total_contention_delay_in_ns / _total_packets_received) << endl;
-      
-      out << "    Average Packet Delay (in clock cycles): " <<
-         ((float) _total_packet_delay / _total_packets_received) << endl;
-      out << "    Average Packet Delay (in ns): " <<
-         ((float) total_packet_delay_in_ns / _total_packets_received) << endl;
-   }
-   else
-   {
-      out << "    Average Contention Delay (in clock cycles): 0" << endl;
-      out << "    Average Contention Delay (in ns): 0" << endl;
-      
-      out << "    Average Packet Delay (in clock cycles): 0" << endl;
-      out << "    Average Packet Delay (in ns): 0" << endl;
-   }
+   NetworkModel::outputSummary(out);
 
    out << "  Ingress Router: " << endl;
    if (_eclos_node_list[INGRESS_ROUTER])

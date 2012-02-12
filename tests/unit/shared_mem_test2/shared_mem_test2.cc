@@ -1,6 +1,6 @@
-#include "core.h"
+#include "tile.h"
 #include "mem_component.h"
-#include "core_manager.h"
+#include "tile_manager.h"
 #include "simulator.h"
 
 #include "carbon_user.h"
@@ -21,9 +21,9 @@ int main (int argc, char *argv[])
 
    carbon_thread_t tid_list[num_threads];
 
-   Core* core = Sim()->getCoreManager()->getCurrentCore();
+   Tile* tile = Sim()->getTileManager()->getCurrentTile();
    int val = 0;
-   core->initiateMemoryAccess(MemComponent::L1_DCACHE, Core::NONE, Core::WRITE, address, (Byte*) &val, sizeof(val));
+   tile->getCurrentCore()->initiateMemoryAccess(MemComponent::L1_DCACHE, Core::NONE, Core::WRITE, address, (Byte*) &val, sizeof(val));
 
    for (int i = 0; i < num_threads; i++)
    {
@@ -35,7 +35,7 @@ int main (int argc, char *argv[])
       CarbonJoinThread(tid_list[i]);
    }
    
-   core->initiateMemoryAccess(MemComponent::L1_DCACHE, Core::NONE, Core::READ, address, (Byte*) &val, sizeof(val));
+   tile->getCurrentCore()->initiateMemoryAccess(MemComponent::L1_DCACHE, Core::NONE, Core::READ, address, (Byte*) &val, sizeof(val));
    
    printf("val(%i)\n", val);
    if (val == (num_threads * num_iterations))
@@ -53,15 +53,15 @@ int main (int argc, char *argv[])
 
 void* thread_func(void*)
 {
-   Core* core = Sim()->getCoreManager()->getCurrentCore();
+   Tile* tile = Sim()->getTileManager()->getCurrentTile();
 
    for (int i = 0; i < num_iterations; i++)
    {
       int val;
-      core->initiateMemoryAccess(MemComponent::L1_DCACHE, Core::LOCK, Core::READ_EX, address, (Byte*) &val, sizeof(val));
+      tile->getCurrentCore()->initiateMemoryAccess(MemComponent::L1_DCACHE, Core::LOCK, Core::READ_EX, address, (Byte*) &val, sizeof(val));
       
       val += 1;
 
-      core->initiateMemoryAccess(MemComponent::L1_DCACHE, Core::UNLOCK, Core::WRITE, address, (Byte*) &val, sizeof(val));
+      tile->getCurrentCore()->initiateMemoryAccess(MemComponent::L1_DCACHE, Core::UNLOCK, Core::WRITE, address, (Byte*) &val, sizeof(val));
    }
 }

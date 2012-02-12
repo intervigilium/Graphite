@@ -1,8 +1,8 @@
 #include "sim_thread.h"
-#include "core_manager.h"
+#include "tile_manager.h"
 #include "log.h"
 #include "simulator.h"
-#include "core.h"
+#include "tile.h"
 #include "sim_thread_manager.h"
 
 SimThread::SimThread()
@@ -17,11 +17,11 @@ SimThread::~SimThread()
 
 void SimThread::run()
 {
-   core_id_t core_id = Sim()->getCoreManager()->registerSimThread();
+   tile_id_t tile_id = Sim()->getTileManager()->registerSimThread();
 
    LOG_PRINT("Sim thread starting...");
 
-   Network *net = Sim()->getCoreManager()->getCoreFromID(core_id)->getNetwork();
+   Network *net = Sim()->getTileManager()->getTileFromID(tile_id)->getNetwork();
    bool cont = true;
 
    Sim()->getSimThreadManager()->simThreadStartCallback();

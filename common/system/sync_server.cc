@@ -2,6 +2,7 @@
 #include "sync_client.h"
 #include "simulator.h"
 #include "thread_manager.h"
+#include "tile_manager.h"
 
 using namespace std;
 
@@ -14,7 +15,7 @@ struct Reply
 // -- SimMutex -- //
 
 SimMutex::SimMutex()
-      : m_owner(NO_OWNER)
+      : m_owner(INVALID_CORE_ID)
 { }
 
 SimMutex::~SimMutex()
@@ -24,7 +25,7 @@ SimMutex::~SimMutex()
 
 bool SimMutex::lock(core_id_t core_id)
 {
-   if (m_owner == NO_OWNER)
+   if (m_owner.tile_id == INVALID_TILE_ID)
    {
       m_owner = core_id;
       return true;
@@ -39,10 +40,11 @@ bool SimMutex::lock(core_id_t core_id)
 
 core_id_t SimMutex::unlock(core_id_t core_id)
 {
-   assert(m_owner == core_id);
+   assert(m_owner.tile_id == core_id.tile_id && m_owner.core_type == core_id.core_type);
+
    if (m_waiting.empty())
    {
-      m_owner = NO_OWNER;
+      m_owner = INVALID_CORE_ID;
    }
    else
    {
@@ -127,11 +129,11 @@ SimBarrier::~SimBarrier()
    assert(m_waiting.empty());
 }
 
-void SimBarrier::wait(core_id_t core_id, UInt64 time, WakeupList &woken_list)
+void SimBarrier::wait(tile_id_t tile_id, UInt64 time, WakeupList &woken_list)
 {
-   m_waiting.push_back(core_id);
+   m_waiting.push_back(tile_id);
 
-   Sim()->getThreadManager()->stallThread(core_id);
+   Sim()->getThreadManager()->stallThread(tile_id);
 
    assert(m_waiting.size() <= m_count);
 
@@ -212,7 +214,7 @@ void SyncServer::mutexUnlock(core_id_t core_id)
 
    core_id_t new_owner = psimmux->unlock(core_id);
 
-   if (new_owner != SimMutex::NO_OWNER)
+   if (new_owner.tile_id != INVALID_TILE_ID)
    {
       // wake up the new owner
       Reply r;
@@ -256,7 +258,7 @@ void SyncServer::condWait(core_id_t core_id)
    StableIterator<SimMutex> it(m_mutexes, mux);
    core_id_t new_mutex_owner = psimcond->wait(core_id, time, it);
 
-   if (new_mutex_owner != SimMutex::NO_OWNER)
+   if (new_mutex_owner.tile_id != INVALID_TILE_ID)
    {
       // wake up the new owner
       Reply r;
@@ -282,7 +284,7 @@ void SyncServer::condSignal(core_id_t core_id)
 
    core_id_t woken = psimcond->signal(core_id, time);
 
-   if (woken != INVALID_CORE_ID)
+   if (woken.tile_id != INVALID_TILE_ID)
    {
       // wake up the new owner
       // (note: COND_WAIT_RESPONSE == MUTEX_LOCK_RESPONSE, see header)
@@ -318,14 +320,14 @@ void SyncServer::condBroadcast(core_id_t core_id)
 
    for (SimCond::WakeupList::iterator it = woken_list.begin(); it != woken_list.end(); it++)
    {
-      assert(*it != INVALID_CORE_ID);
+      assert((*it).tile_id != INVALID_TILE_ID);
 
       // wake up the new owner
       // (note: COND_WAIT_RESPONSE == MUTEX_LOCK_RESPONSE, see header)
       Reply r;
       r.dummy = SyncClient::MUTEX_LOCK_RESPONSE;
       r.time = time;
-      m_network.netSend(*it, MCP_RESPONSE_TYPE, (char*)&r, sizeof(r));
+      m_network.netSend((*it), MCP_RESPONSE_TYPE, (char*)&r, sizeof(r));
    }
 
    // Alert the signaler
@@ -333,7 +335,7 @@ void SyncServer::condBroadcast(core_id_t core_id)
    m_network.netSend(core_id, MCP_RESPONSE_TYPE, (char*)&dummy, sizeof(dummy));
 }
 
-void SyncServer::barrierInit(core_id_t core_id)
+void SyncServer::barrierInit(tile_id_t tile_id)
 {
    UInt32 count;
    m_recv_buffer >> count;
@@ -341,10 +343,10 @@ void SyncServer::barrierInit(core_id_t core_id)
    m_barriers.push_back(SimBarrier(count));
    UInt32 barrier = (UInt32)m_barriers.size()-1;
 
-   m_network.netSend(core_id, MCP_RESPONSE_TYPE, (char*)&barrier, sizeof(barrier));
+   m_network.netSend(TileManager::getMainCoreId(tile_id), MCP_RESPONSE_TYPE, (char*)&barrier, sizeof(barrier));
 }
 
-void SyncServer::barrierWait(core_id_t core_id)
+void SyncServer::barrierWait(tile_id_t tile_id)
 {
    carbon_barrier_t barrier;
    m_recv_buffer >> barrier;
@@ -352,21 +354,22 @@ void SyncServer::barrierWait(core_id_t core_id)
    UInt64 time;
    m_recv_buffer >> time;
 
-   LOG_ASSERT_ERROR(barrier < (core_id_t) m_barriers.size(), "barrier = %i, m_barriers.size()= %u", barrier, m_barriers.size());
+   LOG_ASSERT_ERROR(barrier < (tile_id_t) m_barriers.size(), "barrier = %i, m_barriers.size()= %u", barrier, m_barriers.size());
 
    SimBarrier *psimbarrier = &m_barriers[barrier];
 
    SimBarrier::WakeupList woken_list;
-   psimbarrier->wait(core_id, time, woken_list);
+   psimbarrier->wait(tile_id, time, woken_list);
 
    UInt64 max_time = psimbarrier->getMaxTime();
 
    for (SimBarrier::WakeupList::iterator it = woken_list.begin(); it != woken_list.end(); it++)
    {
-      assert(*it != INVALID_CORE_ID);
+      assert((*it) != INVALID_TILE_ID);
       Reply r;
       r.dummy = SyncClient::BARRIER_WAIT_RESPONSE;
       r.time = max_time;
-      m_network.netSend(*it, MCP_RESPONSE_TYPE, (char*)&r, sizeof(r));
+      core_id_t core_id = TileManager::getMainCoreId((*it));
+      m_network.netSend(core_id, MCP_RESPONSE_TYPE, (char*)&r, sizeof(r));
    }
 }

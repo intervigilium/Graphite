@@ -22,8 +22,6 @@ public:
 
    void outputSummary(std::ostream &out);
 
-   void enable() { _enabled = true; }
-   void disable() { _enabled = false; }
    void reset();
 
 private:
@@ -41,18 +39,11 @@ private:
 
    static UInt32 _NUM_OUTPUT_DIRECTIONS;
 
-   bool _enabled;
-
    Lock _lock;
 
    // Router & Link Models
    ElectricalNetworkRouterModel* _electrical_router_model;
    ElectricalNetworkLinkModel* _electrical_link_model;
-
-   // Performance Counters
-   UInt64 _num_packets;
-   UInt64 _num_bytes;
-   UInt64 _total_latency;
 
    // Activity Counters
    UInt64 _switch_allocator_traversals;
@@ -60,11 +51,10 @@ private:
    UInt64 _link_traversals;
 
    // Private Functions
-   void computePosition(core_id_t core, SInt32 &x, SInt32 &y);
+   void computePosition(tile_id_t tile, SInt32 &x, SInt32 &y);
    SInt32 computeDistance(SInt32 x1, SInt32 y1, SInt32 x2, SInt32 y2);
 
    UInt64 computeProcessingTime(UInt32 pkt_length);
-   core_id_t getRequester(const NetPacket& pkt);
 
    void initializePerformanceCounters();
    void initializeActivityCounters();
@@ -74,7 +64,10 @@ private:
    void destroyRouterAndLinkModels();
 
    void updateDynamicEnergy(const NetPacket& pkt, UInt32 contention, UInt32 num_hops);
-   void outputPowerSummary(std::ostream& out); 
+   void outputPowerSummary(std::ostream& out);
+
+   // Flit Width
+   UInt32 getFlitWidth() { return _link_width; }
 };
 
 #endif

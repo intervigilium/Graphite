@@ -1,7 +1,7 @@
 #include "clock_skew_minimization.h"
 #include "simulator.h"
-#include "core_manager.h"
-#include "core.h"
+#include "tile_manager.h"
+#include "tile.h"
 #include "clock_skew_minimization_object.h"
 
 static bool enabled()
@@ -12,18 +12,18 @@ static bool enabled()
 
 void handlePeriodicSync()
 {
-   Core* core = Sim()->getCoreManager()->getCurrentCore();
-   assert(core);
-   if (core->getId() >= (core_id_t) Sim()->getConfig()->getApplicationCores())
+   Tile* tile = Sim()->getTileManager()->getCurrentTile();
+   assert(tile);
+   if (tile->getId() >= (tile_id_t) Sim()->getConfig()->getApplicationTiles())
    {
-      // Thread Spawner Core / MCP
+      // Thread Spawner Tile / MCP
       return;
    }
 
-   ClockSkewMinimizationClient *client = core->getClockSkewMinimizationClient();
-   assert(client);
+   ClockSkewMinimizationClient *client = tile->getCurrentCore()->getClockSkewMinimizationClient();
 
-   client->synchronize();
+   if (client)
+      client->synchronize();
 }
 
 void addPeriodicSync(INS ins)

@@ -12,16 +12,16 @@ typedef struct
    SInt32 msg_type;
    thread_func_t func;
    void *arg;
-   SInt32 requester;
-   core_id_t core_id;
+   core_id_t requester;
+   core_id_t destination;
    UInt64 time;
 } ThreadSpawnRequest;
 
 typedef struct 
 {
    SInt32 msg_type;
-   SInt32 sender;
-   core_id_t core_id;
+   core_id_t sender;
+   core_id_t receiver;
 } ThreadJoinRequest;
 
 #ifdef __cplusplus

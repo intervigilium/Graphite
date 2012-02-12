@@ -8,7 +8,7 @@
 #include "packetize.h"
 #include "network.h"
 #include "core.h"
-#include "performance_model.h"
+#include "core_model.h"
 #include "clock_converter.h"
 #include "fxsupport.h"
 
@@ -41,7 +41,7 @@ BarrierSyncClient::synchronize(UInt64 cycle_count)
    if (cycle_count == 0)
       cycle_count = m_core->getPerformanceModel()->getCycleCount();
 
-   // Convert from core clock to global clock
+   // Convert from tile clock to global clock
    UInt64 curr_time = convertCycleCount(cycle_count, m_core->getPerformanceModel()->getFrequency(), 1.0);
 
    if (curr_time >= m_next_sync_time)
@@ -50,13 +50,13 @@ BarrierSyncClient::synchronize(UInt64 cycle_count)
       int msg_type = MCP_MESSAGE_CLOCK_SKEW_MINIMIZATION;
 
       m_send_buff << msg_type << curr_time;
-      m_core->getNetwork()->netSend(Config::getSingleton()->getMCPCoreNum(), MCP_SYSTEM_TYPE, m_send_buff.getBuffer(), m_send_buff.size());
+      m_core->getNetwork()->netSend(Config::getSingleton()->getMCPCoreId(), MCP_SYSTEM_TYPE, m_send_buff.getBuffer(), m_send_buff.size());
 
-      LOG_PRINT("Core(%i), curr_time(%llu), m_next_sync_time(%llu) sent SIM_BARRIER_WAIT", m_core->getId(), curr_time, m_next_sync_time);
+      LOG_PRINT("Core(%i, %i), curr_time(%llu), m_next_sync_time(%llu) sent SIM_BARRIER_WAIT", m_core->getCoreId().tile_id, m_core->getCoreId().core_type, curr_time, m_next_sync_time);
 
       // Receive 'BARRIER_RELEASE' response
       NetPacket recv_pkt;
-      recv_pkt = m_core->getNetwork()->netRecv(Config::getSingleton()->getMCPCoreNum(), MCP_SYSTEM_RESPONSE_TYPE);
+      recv_pkt = m_core->getNetwork()->netRecv(Config::getSingleton()->getMCPCoreId(), MCP_SYSTEM_RESPONSE_TYPE);
       assert(recv_pkt.length == sizeof(int));
 
       unsigned int dummy;
@@ -64,7 +64,7 @@ BarrierSyncClient::synchronize(UInt64 cycle_count)
       m_recv_buff >> dummy;
       assert(dummy == BARRIER_RELEASE);
 
-      LOG_PRINT("Core(%i) received SIM_BARRIER_RELEASE", m_core->getId());
+      LOG_PRINT("Tile(%i) received SIM_BARRIER_RELEASE", m_core->getTileId());
 
       // Update 'm_next_sync_time'
       m_next_sync_time = ((curr_time / m_barrier_interval) * m_barrier_interval) + m_barrier_interval;

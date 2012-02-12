@@ -4,7 +4,7 @@
 #include "carbon_user.h"
 #include "fixed_types.h"
 #include "simulator.h"
-#include "core_manager.h"
+#include "tile_manager.h"
 #include "core.h"
 #include "memory_manager.h"
 
@@ -33,9 +33,9 @@ int main(int argc, char *argv[])
       buff[i] = i;
 
    // Get the cores
-   Core* cores[2];
+   Tile* cores[2];
    for (UInt32 j = 0; j < 2; j++)
-      cores[j] = Sim()->getCoreManager()->getCoreFromID(j);
+      cores[j] = Sim()->getTileManager()->getTileFromID(j);
 
    // Read many lines into cache
    // 10 * 2 cold misses
@@ -58,7 +58,7 @@ int main(int argc, char *argv[])
    for (UInt32 i = 0; i < size; i += 3)
    {
       bool is_miss = (bool) cores[1]->accessMemory(Core::NONE, WRITE, address_list[i], (char*) &buff[i], sizeof(buff[i]), true);
-      printf("Core(1) WRITE: %i, is_miss: %s\n", i, (is_miss) ? "true" : "false");
+      printf("Tile(1) WRITE: %i, is_miss: %s\n", i, (is_miss) ? "true" : "false");
    }
 
    printf ("\n\n");
@@ -67,7 +67,7 @@ int main(int argc, char *argv[])
    for (UInt32 i = 0; i < size; i += 4)
    {
       bool is_miss = (bool) cores[0]->accessMemory(Core::NONE, READ, address_list[i], (char*) &buff[i], sizeof(buff[i]), true);
-      printf("Core(0) READ: %i, is_miss: %s\n", i, (is_miss) ? "true" : "false");
+      printf("Tile(0) READ: %i, is_miss: %s\n", i, (is_miss) ? "true" : "false");
    }
 
    printf ("\n\n");
@@ -76,7 +76,7 @@ int main(int argc, char *argv[])
    for (UInt32 i = 0; i < size; i += 2)
    {
       bool is_miss = (bool) cores[0]->accessMemory(Core::NONE, WRITE, address_list[i], (char*) &buff[i], sizeof(buff[i]), true);
-      printf("Core(0) WRITE: %i, is_miss: %s\n", i, (is_miss) ? "true" : "false");
+      printf("Tile(0) WRITE: %i, is_miss: %s\n", i, (is_miss) ? "true" : "false");
    }
 
    IntPtr address_list_2[size] = {
@@ -97,7 +97,7 @@ int main(int argc, char *argv[])
    for (UInt32 i = 0; i < size; i++)
    {
       bool is_miss = (bool) cores[0]->accessMemory(Core::NONE, WRITE, address_list_2[i], (char*) &buff[i], sizeof(buff[i]), true);
-      printf("Core(0) WRITE: 0x%x, is_miss: %s\n", address_list_2[i] >> 16, (is_miss) ? "true" : "false");
+      printf("Tile(0) WRITE: 0x%x, is_miss: %s\n", address_list_2[i] >> 16, (is_miss) ? "true" : "false");
    }
 
    CarbonStopSim();

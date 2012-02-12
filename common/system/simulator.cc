@@ -5,14 +5,15 @@
 #include "log.h"
 #include "lcp.h"
 #include "mcp.h"
-#include "core.h"
-#include "core_manager.h"
+#include "tile.h"
+#include "tile_manager.h"
 #include "thread_manager.h"
 #include "perf_counter_manager.h"
 #include "sim_thread_manager.h"
 #include "clock_skew_minimization_object.h"
 #include "fxsupport.h"
 #include "contrib/orion/orion.h"
+#include "mcpat_cache.h"
 
 Simulator *Simulator::m_singleton;
 config::Config *Simulator::m_config_file;
@@ -56,7 +57,7 @@ Simulator::Simulator()
    , m_config()
    , m_log(m_config)
    , m_transport(NULL)
-   , m_core_manager(NULL)
+   , m_tile_manager(NULL)
    , m_thread_manager(NULL)
    , m_perf_counter_manager(NULL)
    , m_sim_thread_manager(NULL)
@@ -73,18 +74,26 @@ void Simulator::start()
 {
    LOG_PRINT("In Simulator ctor.");
 
-   m_config.logCoreMap();
+   m_config.logTileMap();
 
+   // Get Graphite Home
+   char* graphite_home_str = getenv("GRAPHITE_HOME");
+   _graphite_home = (graphite_home_str) ? ((string)graphite_home_str) : ".";
+   
    // Create Orion Config Object
-   char* graphite_home = getenv("GRAPHITE_HOME");
-   string graphite_home_str = (graphite_home) ? ((string)graphite_home) : ".";
-   string orion_cfg_file = graphite_home_str + "/contrib/orion/orion.cfg";
+   string orion_cfg_file = _graphite_home + "/contrib/orion/orion.cfg";
    OrionConfig::allocate(orion_cfg_file);
    // OrionConfig::getSingleton()->print_config(cout);
+
+   if (Config::getSingleton()->getEnablePowerModeling() || Config::getSingleton()->getEnableAreaModeling())
+   {
+      // Create McPAT Object
+      McPATCache::allocate();
+   }
  
    m_transport = Transport::create();
-   m_core_manager = new CoreManager();
-   m_thread_manager = new ThreadManager(m_core_manager);
+   m_tile_manager = new TileManager();
+   m_thread_manager = new ThreadManager(m_tile_manager);
    m_perf_counter_manager = new PerfCounterManager(m_thread_manager);
    m_sim_thread_manager = new SimThreadManager();
    m_clock_skew_minimization_manager = ClockSkewMinimizationManager::create(getCfg()->getString("clock_skew_minimization/scheme","none"));
@@ -111,7 +120,7 @@ Simulator::~Simulator()
 
    LOG_PRINT("Simulator dtor starting...");
 
-   if ((m_config.getCurrentProcessNum() == 0) && \
+   if ((m_config.getCurrentProcessNum() == 0) &&
       (m_config.getSimulationMode() == Config::FULL))
       m_thread_manager->terminateThreadSpawners();
 
@@ -137,13 +146,13 @@ Simulator::~Simulator()
          << "stop time\t" << (m_stop_time - m_boot_time) << endl
          << "shutdown time\t" << (m_shutdown_time - m_boot_time) << endl;
 
-      m_core_manager->outputSummary(os);
+      m_tile_manager->outputSummary(os);
       os.close();
    }
    else
    {
       stringstream temp;
-      m_core_manager->outputSummary(temp);
+      m_tile_manager->outputSummary(temp);
       assert(temp.str().length() == 0);
    }
 
@@ -154,10 +163,17 @@ Simulator::~Simulator()
    delete m_sim_thread_manager;
    delete m_perf_counter_manager;
    delete m_thread_manager;
-   delete m_core_manager;
+   delete m_tile_manager;
+   m_tile_manager = NULL;
    delete m_transport;
 
-   // Delete Orion Config Object
+   if (Config::getSingleton()->getEnablePowerModeling() || Config::getSingleton()->getEnableAreaModeling())
+   {
+      // Release McPAT Object
+      McPATCache::release();
+   }
+   
+   // Release Orion Config Object
    OrionConfig::release();
 }
 
@@ -215,14 +231,14 @@ void Simulator::deallocateProcess()
 
 void Simulator::startMCP()
 {
-   if (m_config.getCurrentProcessNum() != m_config.getProcessNumForCore(Config::getSingleton()->getMCPCoreNum()))
+   if (m_config.getCurrentProcessNum() != m_config.getProcessNumForTile(Config::getSingleton()->getMCPTileNum()))
       return;
 
    LOG_PRINT("Creating new MCP object in process %i", m_config.getCurrentProcessNum());
 
    // FIXME: Can't the MCP look up its network itself in the
    // constructor?
-   Core* mcp_core = m_core_manager->getCoreFromID(m_config.getMCPCoreNum());
+   Tile* mcp_core = m_tile_manager->getTileFromID(m_config.getMCPTileNum());
    LOG_ASSERT_ERROR(mcp_core, "Could not find the MCP's core!");
 
    Network & mcp_network = *(mcp_core->getNetwork());
@@ -234,7 +250,7 @@ void Simulator::startMCP()
 
 void Simulator::endMCP()
 {
-   if (m_config.getCurrentProcessNum() == m_config.getProcessNumForCore(m_config.getMCPCoreNum()))
+   if (m_config.getCurrentProcessNum() == m_config.getProcessNumForTile(m_config.getMCPTileNum()))
       m_mcp->finish();
 }
 
@@ -246,20 +262,20 @@ bool Simulator::finished()
 void Simulator::enablePerformanceModelsInCurrentProcess()
 {
    Sim()->startTimer();
-   for (UInt32 i = 0; i < Sim()->getConfig()->getNumLocalCores(); i++)
-      Sim()->getCoreManager()->getCoreFromIndex(i)->enablePerformanceModels();
+   for (UInt32 i = 0; i < Sim()->getConfig()->getNumLocalTiles(); i++)
+      Sim()->getTileManager()->getTileFromIndex(i)->enablePerformanceModels();
 }
 
 void Simulator::disablePerformanceModelsInCurrentProcess()
 {
    Sim()->stopTimer();
-   for (UInt32 i = 0; i < Sim()->getConfig()->getNumLocalCores(); i++)
-      Sim()->getCoreManager()->getCoreFromIndex(i)->disablePerformanceModels();
+   for (UInt32 i = 0; i < Sim()->getConfig()->getNumLocalTiles(); i++)
+      Sim()->getTileManager()->getTileFromIndex(i)->disablePerformanceModels();
 }
 
 void Simulator::resetPerformanceModelsInCurrentProcess()
 {
-   for (UInt32 i = 0; i < Sim()->getConfig()->getNumLocalCores(); i++)
-      Sim()->getCoreManager()->getCoreFromIndex(i)->resetPerformanceModels();
+   for (UInt32 i = 0; i < Sim()->getConfig()->getNumLocalTiles(); i++)
+      Sim()->getTileManager()->getTileFromIndex(i)->resetPerformanceModels();
 }
 

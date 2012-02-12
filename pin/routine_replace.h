@@ -14,7 +14,7 @@ void replacementMain (CONTEXT *ctxt);
 void replacementGetThreadToSpawn (CONTEXT *ctxt);
 void replacementThreadStartNull (CONTEXT *ctxt);
 void replacementThreadExitNull (CONTEXT *ctxt);
-void replacementGetCoreId (CONTEXT *ctxt);
+void replacementGetTileId (CONTEXT *ctxt);
 void replacementDequeueThreadSpawnRequest (CONTEXT *ctxt);
 
 // Pin specific stack management
@@ -50,8 +50,6 @@ void replacement_CAPI_message_receive_w_ex (CONTEXT *ctxt);
 void replacementPthreadCreate(CONTEXT *ctxt);
 void replacementPthreadJoin(CONTEXT *ctxt);
 void replacementPthreadExitNull(CONTEXT *ctxt);
-void replacementPthreadBarrierInit(CONTEXT *ctxt);
-void replacementPthreadBarrierWait(CONTEXT *ctxt);
 
 // Enable/Disable Models
 void replacementEnableModels(CONTEXT* ctxt);

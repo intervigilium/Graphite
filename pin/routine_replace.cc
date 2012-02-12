@@ -10,7 +10,7 @@
 #include "config.h"
 #include "simulator.h"
 #include "core.h"
-#include "core_manager.h"
+#include "tile_manager.h"
 #include "redirect_memory.h"
 #include "thread_start.h"
 #include "network.h"
@@ -45,7 +45,8 @@ bool replaceUserAPIFunction(RTN& rtn, string& name)
    else if (name == "CarbonGetThreadToSpawn") msg_ptr = AFUNPTR(replacementGetThreadToSpawn);
    else if (name == "CarbonThreadStart") msg_ptr = AFUNPTR (replacementThreadStartNull);
    else if (name == "CarbonThreadExit") msg_ptr = AFUNPTR (replacementThreadExitNull);
-   else if (name == "CarbonGetCoreId") msg_ptr = AFUNPTR(replacementGetCoreId);
+   //else if (name == "CarbonGetCoreId") msg_ptr = AFUNPTR(replacementGetCoreId);
+   else if (name == "CarbonGetTileId") msg_ptr = AFUNPTR(replacementGetTileId);
    else if (name == "CarbonDequeueThreadSpawnReq") msg_ptr = AFUNPTR (replacementDequeueThreadSpawnRequest);
 
    // PIN specific stack management
@@ -57,7 +58,7 @@ bool replaceUserAPIFunction(RTN& rtn, string& name)
    else if (name == "CarbonStopSim") msg_ptr = AFUNPTR(replacementStopSim);
    else if (name == "CarbonSpawnThread") msg_ptr = AFUNPTR(replacementSpawnThread);
    else if (name == "CarbonJoinThread") msg_ptr = AFUNPTR(replacementJoinThread);
-
+   
    // CAPI
    else if (name == "CAPI_Initialize") msg_ptr = AFUNPTR(replacement_CAPI_Initialize);
    else if (name == "CAPI_rank") msg_ptr = AFUNPTR(replacement_CAPI_rank);
@@ -89,8 +90,6 @@ bool replaceUserAPIFunction(RTN& rtn, string& name)
    // pthread wrappers
    else if (name.find("pthread_create") != std::string::npos) msg_ptr = AFUNPTR(replacementPthreadCreate);
    else if (name.find("pthread_join") != std::string::npos) msg_ptr = AFUNPTR(replacementPthreadJoin);
-   else if (name.find("pthread_barrier_init") != std::string::npos) msg_ptr = AFUNPTR(replacementPthreadBarrierInit);
-   else if (name.find("pthread_barrier_wait") != std::string::npos) msg_ptr = AFUNPTR(replacementPthreadBarrierWait);
    else if (name.find("pthread_exit") != std::string::npos) msg_ptr = AFUNPTR(replacementPthreadExitNull);
 
    // For Getting the Simulated Time
@@ -161,25 +160,30 @@ void replacementMain (CONTEXT *ctxt)
 {
    LOG_PRINT("In replacementMain");
    
+   // The main process, which is the first thread (thread 0), waits for all thread spawners to be created.
    if (Sim()->getConfig()->getCurrentProcessNum() == 0)
    {
       LOG_PRINT("ReplaceMain start");
       
-      Core *core = Sim()->getCoreManager()->getCurrentCore();
+      Core *core = Sim()->getTileManager()->getCurrentCore();
       UInt32 num_processes = Sim()->getConfig()->getProcessCount();
+
+      // For each process, send a message to the thread spawner for that process telling it that
+      // we're initializing, wait until the thread spawners are all initialized.
       for (UInt32 i = 1; i < num_processes; i++)
       {
          // FIXME: 
          // This whole process should probably happen through the MCP
-         core->getNetwork()->netSend (Sim()->getConfig()->getThreadSpawnerCoreNum (i), SYSTEM_INITIALIZATION_NOTIFY, NULL, 0);
+         core->getNetwork()->netSend (Sim()->getConfig()->getThreadSpawnerCoreId(i), SYSTEM_INITIALIZATION_NOTIFY, NULL, 0);
 
          // main thread clock is not affected by start-up time of other processes
-         core->getNetwork()->netRecv (Sim()->getConfig()->getThreadSpawnerCoreNum (i), SYSTEM_INITIALIZATION_ACK);
+         core->getNetwork()->netRecv (Sim()->getConfig()->getThreadSpawnerCoreId(i), SYSTEM_INITIALIZATION_ACK);
       }
       
+      // Tell the thread spawner for each process that we're done initializing...even though we haven't?
       for (UInt32 i = 1; i < num_processes; i++)
       {
-         core->getNetwork()->netSend (Sim()->getConfig()->getThreadSpawnerCoreNum (i), SYSTEM_INITIALIZATION_FINI, NULL, 0);
+         core->getNetwork()->netSend (Sim()->getConfig()->getThreadSpawnerCoreId(i), SYSTEM_INITIALIZATION_FINI, NULL, 0);
       }
 
       spawnThreadSpawner(ctxt);
@@ -191,9 +195,9 @@ void replacementMain (CONTEXT *ctxt)
    else
    {
       // This whole process should probably happen through the MCP
-      Core *core = Sim()->getCoreManager()->getCurrentCore();
-      core->getNetwork()->netSend (Sim()->getConfig()->getMainThreadCoreNum(), SYSTEM_INITIALIZATION_ACK, NULL, 0);
-      core->getNetwork()->netRecv (Sim()->getConfig()->getMainThreadCoreNum(), SYSTEM_INITIALIZATION_FINI);
+      Core *core = Sim()->getTileManager()->getCurrentCore();
+      core->getNetwork()->netSend (Sim()->getConfig()->getMainThreadCoreId(), SYSTEM_INITIALIZATION_ACK, NULL, 0);
+      core->getNetwork()->netRecv (Sim()->getConfig()->getMainThreadCoreId(), SYSTEM_INITIALIZATION_FINI);
 
       int res;
       ADDRINT reg_eip = PIN_GetContextReg (ctxt, REG_INST_PTR);
@@ -228,14 +232,14 @@ void replacementMain (CONTEXT *ctxt)
 
 void replacementGetThreadToSpawn (CONTEXT *ctxt)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    assert (core != NULL);
    
    ThreadSpawnRequest *req;
    ThreadSpawnRequest req_buf;
    initialize_replacement_args (ctxt,
          IARG_PTR, &req,
-         IARG_END);
+         IARG_INVALID);
    
    // Preserve REG_GAX across function call with
    // void return type
@@ -260,18 +264,26 @@ void replacementThreadExitNull (CONTEXT *ctxt)
    retFromReplacedRtn (ctxt, ret_val);
 }
 
-void replacementGetCoreId (CONTEXT *ctxt)
+void replacementGetTileId (CONTEXT *ctxt)
 {
    ADDRINT ret_val = PIN_GetContextReg (ctxt, REG_GAX);
-   CarbonGetCoreId ();
+   CarbonGetTileId ();
 
    retFromReplacedRtn (ctxt, ret_val);
 }
 
+//void replacementGetCoreId (CONTEXT *ctxt)
+//{
+   //ADDRINT ret_val = PIN_GetContextReg (ctxt, REG_GAX);
+   //CarbonGetCoreId ();
+
+   //retFromReplacedRtn (ctxt, ret_val);
+//}
+
 
 void replacementDequeueThreadSpawnRequest (CONTEXT *ctxt)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    assert (core);
 
    ThreadSpawnRequest *thread_req;
@@ -279,7 +291,7 @@ void replacementDequeueThreadSpawnRequest (CONTEXT *ctxt)
    
    initialize_replacement_args (ctxt,
          IARG_PTR, &thread_req,
-         IARG_END);
+         IARG_INVALID);
    ADDRINT ret_val = PIN_GetContextReg (ctxt, REG_GAX);
    
    CarbonDequeueThreadSpawnReq (&thread_req_buf);
@@ -292,7 +304,7 @@ void replacementDequeueThreadSpawnRequest (CONTEXT *ctxt)
 // PIN specific stack management
 void replacementPthreadAttrInitOtherAttr(CONTEXT *ctxt)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    assert(core != NULL);
 
    pthread_attr_t *attr;
@@ -300,7 +312,7 @@ void replacementPthreadAttrInitOtherAttr(CONTEXT *ctxt)
 
    initialize_replacement_args(ctxt,
          IARG_PTR, &attr,
-         IARG_END);
+         IARG_INVALID);
 
    core->accessMemory (Core::NONE, Core::READ, (ADDRINT) attr, (char*) &attr_buf, sizeof (pthread_attr_t));
 
@@ -334,7 +346,7 @@ void replacementSpawnThread (CONTEXT *ctxt)
    initialize_replacement_args (ctxt,
          IARG_PTR, &func,
          IARG_PTR, &arg,
-         IARG_END);
+         IARG_INVALID);
 
    LOG_PRINT("Calling SimSpawnThread");
    ADDRINT ret_val = (ADDRINT) CarbonSpawnThread (func, arg);
@@ -348,7 +360,7 @@ void replacementJoinThread (CONTEXT *ctxt)
 
    initialize_replacement_args (ctxt,
          IARG_ADDRINT, &tid,
-         IARG_END);
+         IARG_INVALID);
 
    ADDRINT ret_val = PIN_GetContextReg (ctxt, REG_GAX);
 
@@ -361,13 +373,13 @@ void replacement_CAPI_Initialize (CONTEXT *ctxt)
 {
    // Only the user-threads (all of which are cores) call
    // the CAPI communication API functions
-   __attribute(__unused__) Core *core = Sim()->getCoreManager()->getCurrentCore();
+   __attribute(__unused__) Core *core = Sim()->getTileManager()->getCurrentCore();
    assert (core);
    
    int comm_id;
    initialize_replacement_args (ctxt,
          IARG_UINT32, &comm_id,
-         IARG_END);
+         IARG_INVALID);
 
    ADDRINT ret_val = PIN_GetContextReg (ctxt, REG_GAX);
 
@@ -380,7 +392,7 @@ void replacement_CAPI_rank (CONTEXT *ctxt)
 {
    // Only the user-threads (all of which are cores) call
    // the CAPI communication API functions
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    assert (core);
    
    int *core_id;
@@ -389,7 +401,7 @@ void replacement_CAPI_rank (CONTEXT *ctxt)
 
    initialize_replacement_args (ctxt,
          IARG_PTR, &core_id,
-         IARG_END);
+         IARG_INVALID);
 
    ret_val = CAPI_rank (&core_id_buf);
    
@@ -402,7 +414,7 @@ void replacement_CAPI_message_send_w (CONTEXT *ctxt)
 {
    // Only the user-threads (all of which are cores) call
    // the CAPI communication API functions
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    assert (core);
    
    CAPI_endpoint_t sender;
@@ -416,7 +428,7 @@ void replacement_CAPI_message_send_w (CONTEXT *ctxt)
          IARG_UINT32, &receiver,
          IARG_PTR, &buffer,
          IARG_UINT32, &size,
-         IARG_END);
+         IARG_INVALID);
 
    char *buf = new char [size];
    core->accessMemory (Core::NONE, Core::READ, (ADDRINT) buffer, buf, size);
@@ -430,7 +442,7 @@ void replacement_CAPI_message_send_w_ex (CONTEXT *ctxt)
 {
    // Only the user-threads (all of which are cores) call
    // the CAPI communication API functions
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    assert (core);
    
    CAPI_endpoint_t sender;
@@ -446,7 +458,7 @@ void replacement_CAPI_message_send_w_ex (CONTEXT *ctxt)
          IARG_PTR, &buffer,
          IARG_UINT32, &size,
          IARG_UINT32, &net_type,
-         IARG_END);
+         IARG_INVALID);
 
    char *buf = new char [size];
    core->accessMemory (Core::NONE, Core::READ, (ADDRINT) buffer, buf, size);
@@ -460,7 +472,7 @@ void replacement_CAPI_message_receive_w (CONTEXT *ctxt)
 {
    // Only the user-threads (all of which are cores) call
    // the CAPI communication API functions
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    assert (core);
    
    CAPI_endpoint_t sender;
@@ -474,7 +486,7 @@ void replacement_CAPI_message_receive_w (CONTEXT *ctxt)
          IARG_UINT32, &receiver,
          IARG_PTR, &buffer,
          IARG_UINT32, &size,
-         IARG_END);
+         IARG_INVALID);
 
    char *buf = new char [size];
    ret_val = CAPI_message_receive_w (sender, receiver, buf, size);
@@ -488,7 +500,7 @@ void replacement_CAPI_message_receive_w_ex (CONTEXT *ctxt)
 {
    // Only the user-threads (all of which are cores) call
    // the CAPI communication API functions
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    assert (core);
    
    CAPI_endpoint_t sender;
@@ -504,7 +516,7 @@ void replacement_CAPI_message_receive_w_ex (CONTEXT *ctxt)
          IARG_PTR, &buffer,
          IARG_UINT32, &size,
          IARG_UINT32, &net_type,
-         IARG_END);
+         IARG_INVALID);
 
    char *buf = new char [size];
    ret_val = CAPI_message_receive_w_ex (sender, receiver, buf, size, net_type);
@@ -519,13 +531,13 @@ void replacementMutexInit (CONTEXT *ctxt)
 {
    // Only the user-threads (all of which are cores) call
    // the Carbon synch API functions
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    assert (core);
    
    carbon_mutex_t *mux;
    initialize_replacement_args (ctxt,
          IARG_PTR, &mux,
-         IARG_END);
+         IARG_INVALID);
    
    carbon_mutex_t mux_buf;
    ADDRINT ret_val = PIN_GetContextReg (ctxt, REG_GAX);
@@ -541,13 +553,13 @@ void replacementMutexLock (CONTEXT *ctxt)
 {
    // Only the user-threads (all of which are cores) call
    // the Carbon synch API functions
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    assert (core);
    
    carbon_mutex_t *mux;
    initialize_replacement_args (ctxt,
          IARG_PTR, &mux,
-         IARG_END);
+         IARG_INVALID);
    
    carbon_mutex_t mux_buf;
    ADDRINT ret_val = PIN_GetContextReg (ctxt, REG_GAX);
@@ -562,13 +574,13 @@ void replacementMutexUnlock (CONTEXT *ctxt)
 {
    // Only the user-threads (all of which are cores) call
    // the Carbon synch API functions
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    assert (core);
    
    carbon_mutex_t *mux;
    initialize_replacement_args (ctxt,
          IARG_PTR, &mux,
-         IARG_END);
+         IARG_INVALID);
    
    carbon_mutex_t mux_buf;
    ADDRINT ret_val = PIN_GetContextReg (ctxt, REG_GAX);
@@ -583,13 +595,13 @@ void replacementCondInit (CONTEXT *ctxt)
 {
    // Only the user-threads (all of which are cores) call
    // the Carbon synch API functions
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    assert (core);
    
    carbon_cond_t *cond;
    initialize_replacement_args (ctxt,
          IARG_PTR, &cond,
-         IARG_END);
+         IARG_INVALID);
    
    carbon_cond_t cond_buf;
    ADDRINT ret_val = PIN_GetContextReg (ctxt, REG_GAX);
@@ -605,7 +617,7 @@ void replacementCondWait (CONTEXT *ctxt)
 {
    // Only the user-threads (all of which are cores) call
    // the Carbon synch API functions
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    assert (core);
    
    carbon_cond_t *cond;
@@ -613,7 +625,7 @@ void replacementCondWait (CONTEXT *ctxt)
    initialize_replacement_args (ctxt,
          IARG_PTR, &cond,
          IARG_PTR, &mux,
-         IARG_END);
+         IARG_INVALID);
    
    carbon_cond_t cond_buf;
    carbon_mutex_t mux_buf;
@@ -630,13 +642,13 @@ void replacementCondSignal (CONTEXT *ctxt)
 {
    // Only the user-threads (all of which are cores) call
    // the Carbon synch API functions
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    assert (core);
    
    carbon_cond_t *cond;
    initialize_replacement_args (ctxt,
          IARG_PTR, &cond,
-         IARG_END);
+         IARG_INVALID);
    
    carbon_cond_t cond_buf;
    ADDRINT ret_val = PIN_GetContextReg (ctxt, REG_GAX);
@@ -652,12 +664,12 @@ void replacementCondBroadcast (CONTEXT *ctxt)
    carbon_cond_t *cond;
    initialize_replacement_args (ctxt,
          IARG_PTR, &cond,
-         IARG_END);
+         IARG_INVALID);
    
    carbon_cond_t cond_buf;
    ADDRINT ret_val = PIN_GetContextReg (ctxt, REG_GAX);
    
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    assert (core);
    core->accessMemory (Core::NONE, Core::READ, (ADDRINT) cond, (char*) &cond_buf, sizeof (cond_buf));
    CarbonCondBroadcast (&cond_buf);
@@ -672,12 +684,12 @@ void replacementBarrierInit (CONTEXT *ctxt)
    initialize_replacement_args (ctxt,
          IARG_PTR, &barrier,
          IARG_UINT32, &count,
-         IARG_END);
+         IARG_INVALID);
    
    carbon_barrier_t barrier_buf;
    ADDRINT ret_val = PIN_GetContextReg (ctxt, REG_GAX);
    
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    assert (core);
    core->accessMemory (Core::NONE, Core::READ, (ADDRINT) barrier, (char*) &barrier_buf, sizeof (barrier_buf));
    CarbonBarrierInit (&barrier_buf, count);
@@ -691,12 +703,12 @@ void replacementBarrierWait (CONTEXT *ctxt)
    carbon_barrier_t *barrier;
    initialize_replacement_args (ctxt,
          IARG_ADDRINT, &barrier,
-         IARG_END);
+         IARG_INVALID);
    
    carbon_barrier_t barrier_buf;
    ADDRINT ret_val = PIN_GetContextReg (ctxt, REG_GAX);
    
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    assert (core);
    core->accessMemory (Core::NONE, Core::READ, (ADDRINT) barrier, (char*) &barrier_buf, sizeof (barrier_buf));
    CarbonBarrierWait (&barrier_buf);
@@ -709,12 +721,12 @@ bool pthread_create_first_time = true;
 
 void replacementPthreadCreate (CONTEXT *ctxt)
 {
-   core_id_t current_core_id =  
-                        Sim()->getCoreManager()->getCurrentCoreID();
-   core_id_t current_thread_spawner_id =  
-                        Sim()->getConfig()->getCurrentThreadSpawnerCoreNum();
+   tile_id_t current_tile_id =  
+                        Sim()->getTileManager()->getCurrentTileID();
+   tile_id_t current_thread_spawner_id =  
+                        Sim()->getConfig()->getCurrentThreadSpawnerTileNum();
    
-   if ( pthread_create_first_time || current_core_id == current_thread_spawner_id )
+   if ( pthread_create_first_time || current_tile_id == current_thread_spawner_id )
    {
       //let the pthread_create call fall through 
       pthread_create_first_time = false;
@@ -731,7 +743,7 @@ void replacementPthreadCreate (CONTEXT *ctxt)
             IARG_PTR, &attributes,
             IARG_PTR, &func,
             IARG_PTR, &func_arg,
-            IARG_END);
+            IARG_INVALID);
 
       //TODO: add support for different attributes and throw warnings for unsupported attrs
       
@@ -742,7 +754,7 @@ void replacementPthreadCreate (CONTEXT *ctxt)
       
       carbon_thread_t new_thread_id = CarbonSpawnThread(func, func_arg);
       
-      Core *core = Sim()->getCoreManager()->getCurrentCore();
+      Core *core = Sim()->getTileManager()->getCurrentCore();
       assert (core);
       
       core->accessMemory(Core::NONE, Core::WRITE, (IntPtr) thread_id, (char*) &new_thread_id, sizeof (pthread_t));
@@ -761,7 +773,7 @@ void replacementPthreadJoin (CONTEXT *ctxt)
    initialize_replacement_args (ctxt,
          IARG_PTR, &thread_id,
          IARG_PTR, &return_value,
-         IARG_END);
+         IARG_INVALID);
 
    //TODO: the return_value needs to be set, but CarbonJoinThread() provides no return value.
    LOG_ASSERT_WARNING (return_value == NULL, "pthread_join() is expecting a return value \
@@ -776,44 +788,6 @@ void replacementPthreadJoin (CONTEXT *ctxt)
 
 void replacementPthreadExitNull (CONTEXT *ctxt)
 {
-   ADDRINT ret_val = PIN_GetContextReg (ctxt, REG_GAX);
-   retFromReplacedRtn (ctxt, ret_val);
-}
-
-void replacementPthreadBarrierInit (CONTEXT *ctxt)
-{
-   pthread_barrier_t *barrier;
-   pthread_barrierattr_t *attributes;
-   UInt32 count;
-
-   initialize_replacement_args (ctxt,
-         IARG_PTR, &barrier,
-         IARG_PTR, &attributes,
-         IARG_UINT32, &count,
-         IARG_END);
-
-   //TODO: add support for different attributes and throw warnings for unsupported attrs
-   if (attributes != NULL)
-   {
-      fprintf(stdout, "Warning: pthread_barrier_init() is using unsupported attributes.\n");
-   }
-   
-   CarbonBarrierInit((carbon_barrier_t*) barrier, count);
-   
-   ADDRINT ret_val = PIN_GetContextReg (ctxt, REG_GAX);
-   retFromReplacedRtn (ctxt, ret_val);
-}
-
-void replacementPthreadBarrierWait (CONTEXT *ctxt)
-{
-   pthread_barrier_t *barrier;
-
-   initialize_replacement_args (ctxt,
-         IARG_PTR, &barrier,
-         IARG_END);
-
-   CarbonBarrierWait((carbon_barrier_t*) barrier);
-   
    ADDRINT ret_val = PIN_GetContextReg (ctxt, REG_GAX);
    retFromReplacedRtn (ctxt, ret_val);
 }
@@ -871,12 +845,12 @@ void replacementCarbonGetCoreFrequency(CONTEXT *ctxt)
 
    initialize_replacement_args(ctxt,
          IARG_PTR, &core_frequency,
-         IARG_END);
+         IARG_INVALID);
 
    volatile float core_frequency_buf;
    CarbonGetCoreFrequency(&core_frequency_buf);
 
-   Core* core = Sim()->getCoreManager()->getCurrentCore();
+   Core* core = Sim()->getTileManager()->getCurrentCore();
    core->accessMemory(Core::NONE, Core::WRITE, (IntPtr) core_frequency, (char*) &core_frequency_buf, sizeof(core_frequency_buf));
 
    ADDRINT ret_val = PIN_GetContextReg(ctxt, REG_GAX);
@@ -889,10 +863,10 @@ void replacementCarbonSetCoreFrequency(CONTEXT *ctxt)
 
    initialize_replacement_args(ctxt,
          IARG_PTR, &core_frequency,
-         IARG_END);
+         IARG_INVALID);
 
    volatile float core_frequency_buf;
-   Core* core = Sim()->getCoreManager()->getCurrentCore();
+   Core* core = Sim()->getTileManager()->getCurrentCore();
    core->accessMemory(Core::NONE, Core::READ, (IntPtr) core_frequency, (char*) &core_frequency_buf, sizeof(core_frequency_buf));
 
    CarbonSetCoreFrequency(&core_frequency_buf);
@@ -911,7 +885,7 @@ void initialize_replacement_args (CONTEXT *ctxt, ...)
    ADDRINT ptr;
    ADDRINT buffer;
    unsigned int count = 0;
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    assert (core);
 
    do
@@ -940,14 +914,14 @@ void initialize_replacement_args (CONTEXT *ctxt, ...)
             count++;
             break;
 
-         case IARG_END:
+         case IARG_INVALID:
             break;
 
          default:
             assert (false);
             break;
       }
-   } while (type != IARG_END);
+   } while (type != IARG_INVALID);
 #endif
 
 #ifdef TARGET_X86_64
@@ -987,14 +961,14 @@ void initialize_replacement_args (CONTEXT *ctxt, ...)
             count++;
             break;
 
-         case IARG_END:
+         case IARG_INVALID:
             break;
 
          default:
             assert (false);
             break;
       }
-   } while (type != IARG_END);
+   } while (type != IARG_INVALID);
 #endif
 }
 
@@ -1021,7 +995,7 @@ void setupCarbonSpawnThreadSpawnerStack (CONTEXT *ctx)
    ADDRINT esp = PIN_GetContextReg (ctx, REG_STACK_PTR);
    ADDRINT ret_ip = * (ADDRINT*) esp;
 
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    assert (core);
 
    core->accessMemory(Core::NONE, Core::WRITE, (IntPtr) esp, (char*) &ret_ip, sizeof (ADDRINT));
@@ -1036,7 +1010,7 @@ void setupCarbonThreadSpawnerStack (CONTEXT *ctx)
    ADDRINT ret_ip = * (ADDRINT*) esp;
    ADDRINT p = * (ADDRINT*) (esp + sizeof (ADDRINT));
 
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    assert (core);
 
    core->accessMemory (Core::NONE, Core::WRITE, (IntPtr) esp, (char*) &ret_ip, sizeof (ADDRINT));

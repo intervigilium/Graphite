@@ -1,11 +1,11 @@
 #include <string.h>
 
 #include "transport.h"
-#include "core.h"
+#include "tile.h"
 #include "network.h"
 #include "memory_manager_base.h"
 #include "simulator.h"
-#include "core_manager.h"
+#include "tile_manager.h"
 #include "clock_converter.h"
 #include "fxsupport.h"
 #include "log.h"
@@ -18,16 +18,16 @@ using namespace std;
 // intelligent about the time stamps, right now the method is very
 // ugly.
 
-Network::Network(Core *core)
-      : _core(core)
+Network::Network(Tile *tile)
+      : _tile(tile)
 {
    LOG_ASSERT_ERROR(sizeof(g_type_to_static_network_map) / sizeof(EStaticNetwork) == NUM_PACKET_TYPES,
                     "Static network type map has incorrect number of entries.");
 
-   _numMod = Config::getSingleton()->getTotalCores();
-   _tid = _core->getId();
+   _numMod = Config::getSingleton()->getTotalTiles();
+   _tid = _tile->getId();
 
-   _transport = Transport::getSingleton()->createNode(_core->getId());
+   _transport = Transport::getSingleton()->createNode(_tile->getId());
 
    _callbacks = new NetworkCallback [NUM_PACKET_TYPES];
    _callbackObjs = new void* [NUM_PACKET_TYPES];
@@ -59,7 +59,6 @@ Network::~Network()
 
 void Network::registerCallback(PacketType type, NetworkCallback callback, void *obj)
 {
-   assert((UInt32)type < NUM_PACKET_TYPES);
    _callbacks[type] = callback;
    _callbackObjs[type] = obj;
 }
@@ -92,8 +91,9 @@ void Network::netPullFromTransport()
 
       NetPacket packet(_transport->recv());
 
-      LOG_PRINT("Pull packet : type %i, from %i, time %llu", (SInt32)packet.type, packet.sender, packet.time);
-      LOG_ASSERT_ERROR(0 <= packet.sender && packet.sender < _numMod,
+      LOG_PRINT("Pull packet : type %i, from {%i, %i}, time %llu",
+            (SInt32)packet.type, packet.sender.tile_id, packet.sender.core_type, (long long unsigned int) packet.time);
+      LOG_ASSERT_ERROR(0 <= packet.sender.tile_id && packet.sender.tile_id < _numMod,
             "Invalid Packet Sender(%i)", packet.sender);
       LOG_ASSERT_ERROR(0 <= packet.type && packet.type < NUM_PACKET_TYPES,
             "Packet type: %d not between 0 and %d", packet.type, NUM_PACKET_TYPES);
@@ -104,8 +104,9 @@ void Network::netPullFromTransport()
       
       if (action & NetworkModel::RoutingAction::FORWARD)
       {
-         LOG_PRINT("Forwarding packet : type %i, from %i, to %i, core_id %i, time %llu.", 
-               (SInt32)packet.type, packet.sender, packet.receiver, _core->getId(), packet.time);
+         LOG_PRINT("Forwarding packet : type %i, from {%i, %i}, to {%i, %i}, tile_id %i, time %llu",
+               (SInt32)packet.type, packet.sender.tile_id, packet.sender.core_type, packet.receiver.tile_id, packet.receiver.core_type,
+               _tile->getId(), (long long unsigned int) packet.time);
          forwardPacket(packet);
       }
       
@@ -119,9 +120,9 @@ void Network::netPullFromTransport()
          LOG_PRINT("After Processing Received Packet: packet.time(%llu)", packet.time);
          
          // Convert from network cycle count to core cycle count
-         packet.time = convertCycleCount(packet.time, \
-               getNetworkModelFromPacketType(packet.type)->getFrequency(), \
-               _core->getPerformanceModel()->getFrequency());
+         packet.time = convertCycleCount(packet.time,
+               getNetworkModelFromPacketType(packet.type)->getFrequency(),
+               _tile->getCore()->getPerformanceModel()->getFrequency());
     
          LOG_PRINT("After Converting Cycle Count: packet.time(%llu)", packet.time);
          
@@ -130,9 +131,9 @@ void Network::netPullFromTransport()
 
          if (callback != NULL)
          {
-            LOG_PRINT("Executing callback on packet : type %i, from %i, to %i, core_id %i, cycle_count %llu", 
-                  (SInt32)packet.type, packet.sender, packet.receiver, _core->getId(), packet.time);
-            assert(0 <= packet.sender && packet.sender < _numMod);
+            LOG_PRINT("Executing callback on packet : type %i, from {%i, %i}, to {%i, %i}, tile_id %i, cycle_count %llu", 
+                  (SInt32)packet.type, packet.sender.tile_id, packet.sender.core_type, packet.receiver.tile_id, packet.receiver.core_type, _tile->getId(), packet.time);
+            assert(0 <= packet.sender.tile_id && packet.sender.tile_id < _numMod);
             assert(0 <= packet.type && packet.type < NUM_PACKET_TYPES);
 
             callback(_callbackObjs[packet.type], packet);
@@ -144,11 +145,14 @@ void Network::netPullFromTransport()
          // synchronous I/O support
          else
          {
-            LOG_PRINT("Enqueuing packet : type %i, from %i, to %i, core_id %i, cycle_count %llu", 
-                  (SInt32)packet.type, packet.sender, packet.receiver, _core->getId(), packet.time);
+            LOG_PRINT("Enqueuing packet : type %i, from {%i, %i}, to {%i, %i}, core_id %i, cycle_count %llu",
+                  (SInt32)packet.type, packet.sender.tile_id, packet.sender.core_type, packet.receiver.tile_id, packet.receiver.core_type,
+                  _tile->getId(), (long long unsigned int) packet.time);
+
             _netQueueLock.acquire();
             _netQueue.push_back(packet);
             _netQueueLock.release();
+
             _netQueueCond.broadcast();
          }
       }
@@ -177,48 +181,19 @@ SInt32 Network::forwardPacket(const NetPacket& packet)
 
    for (UInt32 i = 0; i < hopVec.size(); i++)
    {
-      LOG_PRINT("Send packet : type %i, from %i, to %i, next_hop %i, core_id %i, time %llu", \
-            (SInt32) buff_pkt->type, buff_pkt->sender, hopVec[i].final_dest, hopVec[i].next_dest, \
-            _core->getId(), hopVec[i].time);
-
-      // Do a shared memory shortcut here
-      if ((Config::getSingleton()->getProcessCount() == 1) && (hopVec[i].final_dest != NetPacket::BROADCAST))
-      {
-         // 1) Process Count = 1
-         // 2) The broadcast tree network model is not used
-         while (1)
-         {
-            buff_pkt->time = hopVec[i].time;
-            buff_pkt->receiver = hopVec[i].final_dest;
-            buff_pkt->specific = hopVec[i].specific;
-
-            Core* remote_core = Sim()->getCoreManager()->getCoreFromID(hopVec[i].next_dest);
-            NetworkModel* remote_network_model = remote_core->getNetwork()->getNetworkModelFromPacketType(buff_pkt->type);
-
-            UInt32 action = remote_network_model->computeAction(*buff_pkt);
-            LOG_ASSERT_ERROR(!((action & NetworkModel::RoutingAction::RECEIVE) && \
-                     (action & NetworkModel::RoutingAction::FORWARD)), "action(%u)", action);
-            
-            if (action & NetworkModel::RoutingAction::RECEIVE)
-            {
-               // Destination reached. Break out of the routing loop
-               break;
-            }
-            
-            vector<NetworkModel::Hop> localHopVec;
-            remote_network_model->routePacket(*buff_pkt, localHopVec);
-            LOG_ASSERT_ERROR(localHopVec.size() == 1, "Only unicasts allowed in this routing loop(%u)",
-                  localHopVec.size());
-
-            hopVec[i] = localHopVec[0];
-         }
-      }
+      LOG_PRINT("Send packet : type %i, from {%i,%i}, to {%i, %i}, next_hop %i, tile_id %i, time %llu",
+            (SInt32) buff_pkt->type,
+            buff_pkt->sender.tile_id, buff_pkt->sender.core_type,
+            hopVec[i].final_dest.tile_id, hopVec[i].final_dest.core_type,
+            hopVec[i].next_dest.tile_id,
+            _tile->getId(),
+            (long long unsigned int) hopVec[i].time);
 
       buff_pkt->time = hopVec[i].time;
       buff_pkt->receiver = hopVec[i].final_dest;
       buff_pkt->specific = hopVec[i].specific;
 
-      _transport->send(hopVec[i].next_dest, buffer, packet.bufferSize());
+      _transport->send(hopVec[i].next_dest.tile_id, buffer, packet.bufferSize());
       
       LOG_PRINT("Sent packet");
    }
@@ -240,13 +215,21 @@ SInt32 Network::netSend(NetPacket& packet)
    // Floating Point Save/Restore
    FloatingPointHandler floating_point_handler;
 
+   assert(_tile);
+
+   LOG_PRINT("Sending Packet: type %i, from {%i,%i} to {%i,%i}, cycle count %llu",
+         packet.type, packet.sender.tile_id, packet.sender.core_type, packet.receiver.tile_id, packet.receiver.core_type, packet.time);
+
    // Convert from core cycle count to network cycle count
-   packet.time = convertCycleCount(packet.time, \
-         _core->getPerformanceModel()->getFrequency(), \
+   packet.time = convertCycleCount(packet.time,
+         _tile->getCore()->getPerformanceModel()->getFrequency(),
          getNetworkModelFromPacketType(packet.type)->getFrequency());
 
    // Note the start time
    packet.start_time = packet.time;
+
+   // Update Send Counters
+   (getNetworkModelFromPacketType(packet.type))->updateSendCounters(packet);
 
    // Call forwardPacket(packet)
    return forwardPacket(packet);
@@ -261,12 +244,14 @@ class NetRecvIterator
             : _mode(INT)
             , _max(i)
             , _i(0)
+            , _core_type(MAIN_CORE_TYPE)
       {
       }
-      NetRecvIterator(const std::vector<SInt32> &v)
+      NetRecvIterator(const std::vector<core_id_t> &v)
             : _mode(SENDER_VECTOR)
             , _senders(&v)
             , _i(0)
+            , _core_type(MAIN_CORE_TYPE)
       {
       }
       NetRecvIterator(const std::vector<PacketType> &v)
@@ -282,13 +267,25 @@ class NetRecvIterator
          {
          case INT:
             return _i;
-         case SENDER_VECTOR:
-            return (UInt32)_senders->at(_i);
          case TYPE_VECTOR:
             return (UInt32)_types->at(_i);
          default:
             assert(false);
             return (UInt32)-1;
+         };
+      }
+
+      inline core_id_t getCoreId()
+      {
+         switch (_mode)
+         {
+         case SENDER_VECTOR:
+            return (core_id_t)_senders->at(_i);
+         case INT:
+            return Sim()->getTileManager()->getMainCoreId(_i);
+         default:
+            assert(false);
+            return INVALID_CORE_ID;
          };
       }
 
@@ -327,11 +324,12 @@ class NetRecvIterator
       union
       {
          UInt32 _max;
-         const std::vector<SInt32> *_senders;
+         const std::vector<core_id_t> *_senders;
          const std::vector<PacketType> *_types;
       };
 
       UInt32 _i;
+      core_type_t _core_type;
 };
 
 NetPacket Network::netRecv(const NetMatch &match)
@@ -352,9 +350,9 @@ NetPacket Network::netRecv(const NetMatch &match)
                           ? NetRecvIterator((UInt32)NUM_PACKET_TYPES)
                           : NetRecvIterator(match.types);
 
-   LOG_ASSERT_ERROR(_core && _core->getPerformanceModel(),
-                    "Core and/or performance model not initialized.");
-   UInt64 start_time = _core->getPerformanceModel()->getCycleCount();
+   LOG_ASSERT_ERROR(_tile && _tile->getCore()->getPerformanceModel(),
+                    "Tile and/or performance model not initialized.");
+   UInt64 start_time = _tile->getCore()->getPerformanceModel()->getCycleCount();
 
    _netQueueLock.acquire();
 
@@ -367,10 +365,17 @@ NetPacket Network::netRecv(const NetMatch &match)
             i != _netQueue.end();
             i++)
       {
+         // make sure that this core is the proper destination core for this tile
+         if (i->receiver.tile_id != _tile->getId() || i->receiver.core_type != _tile->getCurrentCore()->getCoreType())
+         {
+            if (i->receiver.tile_id != NetPacket::BROADCAST)
+               continue;
+         }
+
          // only find packets that match
          for (sender.reset(); !sender.done(); sender.next())
          {
-            if (i->sender != (SInt32)sender.get())
+            if (i->sender.tile_id != sender.getCoreId().tile_id || i->sender.core_type != sender.getCoreId().core_type)
                continue;
 
             for (type.reset(); !type.done(); type.next())
@@ -382,7 +387,7 @@ NetPacket Network::netRecv(const NetMatch &match)
 
                // find the earliest packet
                if (itr == _netQueue.end() ||
-                   itr->time > i->time)
+                     itr->time > i->time)
                {
                   itr = i;
                }
@@ -393,18 +398,19 @@ NetPacket Network::netRecv(const NetMatch &match)
       // go to sleep until a packet arrives if none have been found
       if (!found)
       {
-         _netQueueCond.wait(_netQueueLock);
+            _netQueueCond.wait(_netQueueLock);
       }
    }
 
    assert(found == true && itr != _netQueue.end());
-   assert(0 <= itr->sender && itr->sender < _numMod);
+   assert(0 <= itr->sender.tile_id && itr->sender.tile_id < _numMod);
    assert(0 <= itr->type && itr->type < NUM_PACKET_TYPES);
-   assert((itr->receiver == _core->getId()) || (itr->receiver == NetPacket::BROADCAST));
+   assert((itr->receiver.tile_id == _tile->getId()) || (itr->receiver.tile_id == NetPacket::BROADCAST));
 
    // Copy result
    NetPacket packet = *itr;
    _netQueue.erase(itr);
+
    _netQueueLock.release();
 
    LOG_PRINT("packet.time(%llu), start_time(%llu)", packet.time, start_time);
@@ -413,23 +419,26 @@ NetPacket Network::netRecv(const NetMatch &match)
    {
       LOG_PRINT("Queueing RecvInstruction(%llu)", packet.time - start_time);
       Instruction *i = new RecvInstruction(packet.time - start_time);
-      _core->getPerformanceModel()->queueDynamicInstruction(i);
+      _tile->getCore()->getPerformanceModel()->queueDynamicInstruction(i);
    }
 
-   LOG_PRINT("Exiting netRecv : type %i, from %i", (SInt32)packet.type, packet.sender);
+   LOG_PRINT("Exiting netRecv : type %i, from {%i,%i}", (SInt32)packet.type, packet.sender.tile_id, packet.sender.core_type);
 
    return packet;
 }
 
 // -- Wrappers
 
-SInt32 Network::netSend(SInt32 dest, PacketType type, const void *buf, UInt32 len)
+SInt32 Network::netSend(core_id_t dest, PacketType type, const void *buf, UInt32 len)
 {
    NetPacket packet;
-   assert(_core && _core->getPerformanceModel());
-   packet.time = _core->getPerformanceModel()->getCycleCount();
-   packet.sender = _core->getId();
-   packet.receiver = dest;
+   assert(_tile);
+   assert(_tile->getCurrentCore()->getPerformanceModel()); 
+   packet.time = _tile->getCurrentCore()->getPerformanceModel()->getCycleCount();
+   packet.sender.tile_id = _tile->getCurrentCore()->getCoreId().tile_id;
+   packet.sender.core_type = _tile->getCurrentCore()->getCoreId().core_type;
+   packet.receiver.tile_id = dest.tile_id;
+   packet.receiver.core_type = dest.core_type;
    packet.length = len;
    packet.type = type;
    packet.data = buf;
@@ -439,10 +448,10 @@ SInt32 Network::netSend(SInt32 dest, PacketType type, const void *buf, UInt32 le
 
 SInt32 Network::netBroadcast(PacketType type, const void *buf, UInt32 len)
 {
-   return netSend(NetPacket::BROADCAST, type, buf, len);
+   return netSend((core_id_t) {NetPacket::BROADCAST, -1} , type, buf, len);
 }
 
-NetPacket Network::netRecv(SInt32 src, PacketType type)
+NetPacket Network::netRecv(core_id_t src, PacketType type)
 {
    NetMatch match;
    match.senders.push_back(src);
@@ -450,7 +459,7 @@ NetPacket Network::netRecv(SInt32 src, PacketType type)
    return netRecv(match);
 }
 
-NetPacket Network::netRecvFrom(SInt32 src)
+NetPacket Network::netRecvFrom(core_id_t src)
 {
    NetMatch match;
    match.senders.push_back(src);
@@ -497,8 +506,8 @@ UInt32 Network::getModeledLength(const NetPacket& pkt)
       // 1 byte for packet_type
       // log2(core_id) for sender and receiver
       // 2 bytes for packet length
-      UInt32 metadata_size = 1 + 2 * Config::getSingleton()->getCoreIDLength() + 2;
-      UInt32 data_size = getCore()->getMemoryManager()->getModeledLength(pkt.data);
+      UInt32 metadata_size = 1 + 2 * Config::getSingleton()->getTileIDLength() + 2;
+      UInt32 data_size = getTile()->getCore()->getMemoryManager()->getModeledLength(pkt.data);
       return metadata_size + data_size;
    }
    else
@@ -526,6 +535,20 @@ NetPacket::NetPacket(UInt64 t, PacketType ty, SInt32 s,
    : start_time(0)
    , time(t)
    , type(ty)
+   , specific(-1)
+   , length(l)
+   , data(d)
+{
+   sender = Sim()->getTileManager()->getMainCoreId(s);
+   receiver = Sim()->getTileManager()->getMainCoreId(r);
+}
+
+
+NetPacket::NetPacket(UInt64 t, PacketType ty, core_id_t s,
+                     core_id_t r, UInt32 l, const void *d)
+   : start_time(0)
+   , time(t)
+   , type(ty)
    , sender(s)
    , receiver(r)
    , specific(-1)
@@ -533,7 +556,6 @@ NetPacket::NetPacket(UInt64 t, PacketType ty, SInt32 s,
    , data(d)
 {
 }
-
 
 NetPacket::NetPacket(Byte *buffer)
 {

@@ -5,7 +5,7 @@
 #include <list>
 
 #include "clock_skew_minimization_object.h"
-#include "core.h"
+#include "tile.h"
 #include "lock.h"
 #include "cond.h"
 #include "random.h"
@@ -25,6 +25,7 @@ class RandomPairsSyncClient : public ClockSkewMinimizationClient
             NUM_MSG_TYPES
          };
 
+         //tile_id_t sender;
          core_id_t sender;
          MsgType type;
          UInt64 time;

@@ -5,20 +5,17 @@
 #include "simulator.h"
 #include "config.h"
 #include "config.h"
-#include "core.h"
-#include "memory_manager_base.h"
-#include "clock_converter.h"
+#include "tile.h"
 
 UInt32 NetworkModelEMeshHopCounter::_NUM_OUTPUT_DIRECTIONS = 4;
 
 NetworkModelEMeshHopCounter::NetworkModelEMeshHopCounter(Network *net, SInt32 network_id)
    : NetworkModel(net, network_id)
-   , _enabled(false)
 {
-   SInt32 total_cores = Config::getSingleton()->getTotalCores();
+   SInt32 total_tiles = Config::getSingleton()->getTotalTiles();
 
-   _mesh_width = (SInt32) floor (sqrt(total_cores));
-   _mesh_height = (SInt32) ceil (1.0 * total_cores / _mesh_width);
+   _mesh_width = (SInt32) floor (sqrt(total_tiles));
+   _mesh_height = (SInt32) ceil (1.0 * total_tiles / _mesh_width);
 
    try
    {
@@ -29,15 +26,12 @@ NetworkModelEMeshHopCounter::NetworkModelEMeshHopCounter(Network *net, SInt32 ne
       LOG_PRINT_ERROR("Could not read emesh_hop_counter paramters from the cfg file");
    }
 
-   assert(total_cores <= _mesh_width * _mesh_height);
-   assert(total_cores > (_mesh_width - 1) * _mesh_height);
-   assert(total_cores > _mesh_width * (_mesh_height - 1));
+   assert(total_tiles <= _mesh_width * _mesh_height);
+   assert(total_tiles > (_mesh_width - 1) * _mesh_height);
+   assert(total_tiles > _mesh_width * (_mesh_height - 1));
 
    // Create Rounter & Link Models
    createRouterAndLinkModels();
-
-   // Initialize Performance Counters
-   initializePerformanceCounters();
 }
 
 NetworkModelEMeshHopCounter::~NetworkModelEMeshHopCounter()
@@ -116,19 +110,11 @@ NetworkModelEMeshHopCounter::destroyRouterAndLinkModels()
 }
 
 void
-NetworkModelEMeshHopCounter::initializePerformanceCounters()
-{
-   _num_packets = 0;
-   _num_bytes = 0;
-   _total_latency = 0;
-}
-
-void
-NetworkModelEMeshHopCounter::computePosition(core_id_t core,
+NetworkModelEMeshHopCounter::computePosition(tile_id_t tile,
                                              SInt32 &x, SInt32 &y)
 {
-   x = core % _mesh_width;
-   y = core / _mesh_width;
+   x = tile % _mesh_width;
+   y = tile / _mesh_width;
 }
 
 SInt32
@@ -140,9 +126,9 @@ NetworkModelEMeshHopCounter::computeDistance(SInt32 x1, SInt32 y1, SInt32 x2, SI
 UInt32
 NetworkModelEMeshHopCounter::computeAction(const NetPacket& pkt)
 {
-   core_id_t core_id = getNetwork()->getCore()->getId();
-   LOG_ASSERT_ERROR((pkt.receiver == NetPacket::BROADCAST) || (pkt.receiver == core_id), \
-         "pkt.receiver(%i), core_id(%i)", pkt.receiver, core_id);
+   tile_id_t tile_id = getNetwork()->getTile()->getId();
+   LOG_ASSERT_ERROR((pkt.receiver.tile_id == NetPacket::BROADCAST) || (pkt.receiver.tile_id == tile_id), \
+         "pkt.receiver.tile_id(%i), tile_id(%i)", pkt.receiver.tile_id, tile_id);
 
    return RoutingAction::RECEIVE;
 }
@@ -157,23 +143,23 @@ NetworkModelEMeshHopCounter::routePacket(const NetPacket &pkt,
 
    SInt32 sx, sy, dx, dy;
 
-   computePosition(pkt.sender, sx, sy);
+   computePosition(pkt.sender.tile_id, sx, sy);
 
-   if (pkt.receiver == NetPacket::BROADCAST)
+   if (pkt.receiver.tile_id == NetPacket::BROADCAST)
    {
-      UInt32 total_cores = Config::getSingleton()->getTotalCores();
+      UInt32 total_tiles = Config::getSingleton()->getTotalTiles();
    
       UInt64 curr_time = pkt.time;
       // There's no broadcast tree here, but I guess that won't be a
       // bottleneck at all since there's no contention
-      for (SInt32 i = 0; i < (SInt32) total_cores; i++)
+      for (SInt32 i = 0; i < (SInt32) total_tiles; i++)
       {
          computePosition(i, dx, dy);
 
          UInt32 num_hops = computeDistance(sx, sy, dx, dy);
          UInt64 latency = num_hops * _hop_latency;
 
-         if (i != pkt.sender)
+         if (i != pkt.sender.tile_id)
          {
             // Update the Dynamic Energy - Need to update the dynamic energy for all routers to the destination
             // We dont keep track of contention here. So, assume contention = 0
@@ -183,8 +169,8 @@ NetworkModelEMeshHopCounter::routePacket(const NetPacket &pkt,
          }
 
          Hop h;
-         h.final_dest = NetPacket::BROADCAST;
-         h.next_dest = i;
+         h.final_dest.tile_id = NetPacket::BROADCAST;
+         h.next_dest.tile_id = i;
          h.time = curr_time + latency;
 
          // Update curr_time
@@ -195,12 +181,12 @@ NetworkModelEMeshHopCounter::routePacket(const NetPacket &pkt,
    }
    else
    {
-      computePosition(pkt.receiver, dx, dy);
+      computePosition(pkt.receiver.tile_id, dx, dy);
 
       UInt32 num_hops = computeDistance(sx, sy, dx, dy);
       UInt64 latency = num_hops * _hop_latency;
 
-      if (pkt.receiver != pkt.sender)
+      if (pkt.receiver.tile_id != pkt.sender.tile_id)
       {
          // Update the Dynamic Energy - Need to update the dynamic energy for all routers to the destination
          // We dont keep track of contention here. So, assume contention = 0
@@ -210,8 +196,8 @@ NetworkModelEMeshHopCounter::routePacket(const NetPacket &pkt,
       }
 
       Hop h;
-      h.final_dest = pkt.receiver;
-      h.next_dest = pkt.receiver;
+      h.final_dest.tile_id = pkt.receiver.tile_id;
+      h.next_dest.tile_id = pkt.receiver.tile_id;
       h.time = pkt.time + latency;
 
       next_hops.push_back(h);
@@ -223,19 +209,9 @@ NetworkModelEMeshHopCounter::processReceivedPacket(NetPacket &pkt)
 {
    ScopedLock sl(_lock);
 
-   core_id_t requester = getRequester(pkt);
-   if ((!_enabled) || (requester >= (core_id_t) Config::getSingleton()->getApplicationCores()))
-      return;
-
-   UInt32 pkt_length = getNetwork()->getModeledLength(pkt);
-
-   // LOG_ASSERT_ERROR(pkt.start_time > 0, "start_time(%llu)", pkt.start_time);
-
-   UInt64 latency = pkt.time - pkt.start_time;
-
-   _num_packets ++;
-   _num_bytes += pkt_length;
-   _total_latency += latency;
+   // Update Receive Counters
+   UInt64 zero_load_latency = pkt.time - pkt.start_time;
+   updateReceiveCounters(pkt, zero_load_latency);   
 }
 
 UInt64 
@@ -250,28 +226,9 @@ NetworkModelEMeshHopCounter::computeProcessingTime(UInt32 pkt_length)
       return (UInt64) (num_bits/_link_width + 1);
 }
 
-core_id_t
-NetworkModelEMeshHopCounter::getRequester(const NetPacket& pkt)
-{
-   core_id_t requester = INVALID_CORE_ID;
-
-   if ((pkt.type == SHARED_MEM_1) || (pkt.type == SHARED_MEM_2))
-      requester = getNetwork()->getCore()->getMemoryManager()->getShmemRequester(pkt.data);
-   else // Other Packet types
-      requester = pkt.sender;
-   
-   LOG_ASSERT_ERROR((requester >= 0) && (requester < (core_id_t) Config::getSingleton()->getTotalCores()),
-         "requester(%i)", requester);
-
-   return requester;
-}
-
 void
 NetworkModelEMeshHopCounter::reset()
 {
-   // Performance Counters
-   initializePerformanceCounters();
-   
    // Activity Counters
    initializeActivityCounters();
    
@@ -283,12 +240,7 @@ NetworkModelEMeshHopCounter::reset()
 void
 NetworkModelEMeshHopCounter::outputSummary(std::ostream &out)
 {
-   out << "    num packets received: " << _num_packets << std::endl;
-   out << "    num bytes received: " << _num_bytes << std::endl;
-   UInt64 total_latency_in_ns = convertCycleCount(_total_latency, _frequency, 1.0);
-   out << "    average latency (in clock cycles): " << ((float) _total_latency) / _num_packets << std::endl;
-   out << "    average latency (in ns): " << ((float) total_latency_in_ns) / _num_packets << std::endl;
-
+   NetworkModel::outputSummary(out);
    outputPowerSummary(out);
 }
 
@@ -297,8 +249,8 @@ void
 NetworkModelEMeshHopCounter::updateDynamicEnergy(const NetPacket& pkt,
       UInt32 contention, UInt32 num_hops)
 {
-   core_id_t requester = getRequester(pkt);
-   if ((!_enabled) || (requester >= (core_id_t) Config::getSingleton()->getApplicationCores()))
+   tile_id_t requester = getRequester(pkt);
+   if ((!isEnabled()) || (requester >= (tile_id_t) Config::getSingleton()->getApplicationTiles()))
       return;
 
    // TODO: Make these models detailed later - Compute exact number of bit flips

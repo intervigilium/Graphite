@@ -13,18 +13,18 @@
 
 #include "thread_support.h"
 
-class CoreManager;
+class TileManager;
 
 class ThreadManager
 {
 public:
-   ThreadManager(CoreManager*);
+   ThreadManager(TileManager*);
    ~ThreadManager();
 
    // services
    SInt32 spawnThread(thread_func_t func, void *arg);
-   void joinThread(core_id_t core_id);
-
+   void joinThread(tile_id_t tile_id);
+   
    void getThreadToSpawn(ThreadSpawnRequest *req);
    ThreadSpawnRequest* getThreadSpawnReq();
    void dequeueThreadSpawnReq (ThreadSpawnRequest *req);
@@ -36,6 +36,11 @@ public:
    void onThreadExit();
 
    // misc
+   void stallThread(tile_id_t tile_id);
+   void resumeThread(tile_id_t tile_id);
+   bool isThreadRunning(tile_id_t core_id);
+   bool isThreadInitializing(tile_id_t tile_id);
+
    void stallThread(core_id_t core_id);
    void resumeThread(core_id_t core_id);
    bool isThreadRunning(core_id_t core_id);
@@ -52,9 +57,10 @@ private:
    void slaveSpawnThread(ThreadSpawnRequest*);
    void masterSpawnThreadReply(ThreadSpawnRequest*);
 
-   void masterOnThreadExit(core_id_t core_id, UInt64 time);
 
-   void slaveTerminateThreadSpawnerAck (core_id_t);
+   void masterOnThreadExit(tile_id_t tile_id, UInt32 core_type, UInt64 time);
+
+   void slaveTerminateThreadSpawnerAck (tile_id_t);
    void slaveTerminateThreadSpawner ();
    void updateTerminateThreadSpawner ();
 
@@ -66,11 +72,12 @@ private:
    struct ThreadState
    {
       Core::State status;
-      SInt32 waiter;
+      //SInt32 waiter;
+      core_id_t waiter;
 
       ThreadState()
          : status(Core::IDLE)
-         , waiter(-1)
+         , waiter(INVALID_CORE_ID)
       {} 
    };
 
@@ -80,7 +87,7 @@ private:
    Semaphore m_thread_spawn_sem;
    Lock m_thread_spawn_lock;
 
-   CoreManager *m_core_manager;
+   TileManager *m_tile_manager;
 
    Lock m_thread_spawners_terminated_lock;
    UInt32 m_thread_spawners_terminated;

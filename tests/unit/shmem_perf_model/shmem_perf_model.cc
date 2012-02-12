@@ -1,9 +1,9 @@
-#include "core.h"
+include "tile.h"
 #include "memory_manager_base.h"
 
 #include "shmem_perf_model.h"
 
-#include "core_manager.h"
+#include "tile_manager.h"
 #include "simulator.h"
 
 #include "carbon_user.h"
@@ -18,13 +18,13 @@ int main (int argc, char *argv[])
 
    UInt32 address[2] = {0x0, 0x1000};
 
-   // 1) Get a core object
+   // 1) Get a tile object
    // 2) Get a memory_manager object from it
    // 3) Do initiateSharedMemReq() on the memory_manager object
 
-   Core* core = Sim()->getCoreManager()->getCoreFromIndex(0);
-   MemoryManagerBase* memory_manager = core->getMemoryManager();
-   ShmemPerfModel* shmem_perf_model = core->getShmemPerfModel();
+   Tile* tile = Sim()->getTileManager()->getTileFromIndex(0);
+   MemoryManagerBase* memory_manager = tile->getMemoryManager();
+   ShmemPerfModel* shmem_perf_model = tile->getShmemPerfModel();
 
    Byte data_buf[4];
    bool cache_hit;

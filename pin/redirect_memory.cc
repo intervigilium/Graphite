@@ -1,9 +1,9 @@
 #include "redirect_memory.h"
 #include "simulator.h"
-#include "core_manager.h"
+#include "tile_manager.h"
 #include "core.h"
 #include "pin_memory_manager.h"
-#include "performance_model.h"
+#include "core_model.h"
 
 // FIXME
 // Only need this function because some memory accesses are made before cores have
@@ -13,7 +13,7 @@ void memOp (Core::lock_signal_t lock_signal, Core::mem_op_t mem_op_type, IntPtr 
 {   
    assert (lock_signal == Core::NONE);
 
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    LOG_ASSERT_ERROR(core, "Could not find Core object for current thread");
    core->accessMemory (lock_signal, mem_op_type, d_addr, data_buffer, data_size, true);
 }
@@ -157,7 +157,7 @@ void emuCMPSBIns(CONTEXT *ctxt, ADDRINT next_gip, bool has_rep_prefix)
       }
    }
 
-   PerformanceModel *perf = Sim()->getCoreManager()->getCurrentCore()->getPerformanceModel();
+   CoreModel *perf = Sim()->getTileManager()->getCurrentCore()->getPerformanceModel();
    DynamicInstructionInfo info = DynamicInstructionInfo::createStringInfo(num_mem_ops);
    perf->pushDynamicInstructionInfo(info);
 
@@ -239,7 +239,7 @@ void emuSCASBIns(CONTEXT *ctxt, ADDRINT next_gip, bool has_rep_prefix)
       }
    }
 
-   PerformanceModel *perf = Sim()->getCoreManager()->getCurrentCore()->getPerformanceModel();
+   CoreModel *perf = Sim()->getTileManager()->getCurrentCore()->getPerformanceModel();
    DynamicInstructionInfo info = DynamicInstructionInfo::createStringInfo(num_mem_ops);
    perf->pushDynamicInstructionInfo(info);
 
@@ -500,12 +500,13 @@ void rewriteMemOp (INS ins)
          assert(! INS_IsAtomicUpdate(ins));
 
          INS_InsertCall (ins, IPOINT_BEFORE,
-               AFUNPTR (redirectMemOp),
+               AFUNPTR (redirectMemOpAndCaptureEa),
                IARG_BOOL, false,
                IARG_MEMORYWRITE_EA,
                IARG_MEMORYWRITE_SIZE,
                IARG_UINT32, PinMemoryManager::ACCESS_TYPE_WRITE,
                IARG_RETURN_REGS, REG_INST_G2,
+               IARG_REG_REFERENCE, REG_INST_G3,  /* store IARG_MEMORYWRITE_EA in G3 */
                IARG_END);
 
          IPOINT ipoint = INS_HasFallThrough (ins) ? IPOINT_AFTER : IPOINT_TAKEN_BRANCH;
@@ -514,7 +515,7 @@ void rewriteMemOp (INS ins)
          INS_InsertCall (ins, ipoint, 
                AFUNPTR (completeMemWrite),
                IARG_BOOL, false,
-               IARG_MEMORYWRITE_EA,
+               IARG_REG_VALUE, REG_INST_G3,  /* value of IARG_MEMORYWRITE_EA at IPOINT_BEFORE */
                IARG_MEMORYWRITE_SIZE,
                IARG_UINT32, PinMemoryManager::ACCESS_TYPE_WRITE,
                IARG_END);
@@ -557,10 +558,16 @@ void rewriteMemOp (INS ins)
             assert (num_mem_read_operands > 0);
             assert (access_type != PinMemoryManager::ACCESS_TYPE_WRITE);
 
+            INS_InsertCall (ins, IPOINT_BEFORE,
+                  AFUNPTR (captureWriteEa),
+                  IARG_MEMORYWRITE_EA,
+                  IARG_RETURN_REGS, REG_INST_G3,  /* store IARG_MEMORYWRITE_EA in G3 */
+                  IARG_END);
+
             INS_InsertCall (ins, ipoint2,
                   AFUNPTR (completeMemWrite),
                   IARG_BOOL, INS_IsAtomicUpdate(ins),
-                  IARG_MEMORYWRITE_EA,
+                  IARG_REG_VALUE, REG_INST_G3,  /* value of IARG_MEMORYWRITE_EA at IPOINT_BEFORE */
                   IARG_MEMORYWRITE_SIZE,
                   IARG_UINT32, access_type,
                   IARG_END);
@@ -653,7 +660,7 @@ ADDRINT emuRet(ADDRINT *tgt_esp, UINT32 imm, ADDRINT read_size, BOOL modeled)
 
    ADDRINT next_ip;
 
-   Sim()->getCoreManager()->getCurrentCore()->accessMemory(Core::NONE, Core::READ, (IntPtr) *tgt_esp, (char*) &next_ip, (UInt32) read_size, (bool)modeled);
+   Sim()->getTileManager()->getCurrentCore()->accessMemory(Core::NONE, Core::READ, (IntPtr) *tgt_esp, (char*) &next_ip, (UInt32) read_size, (bool)modeled);
 
    *tgt_esp = *tgt_esp + read_size;
    *tgt_esp = *tgt_esp + imm;
@@ -678,7 +685,7 @@ ADDRINT redirectPushf ( ADDRINT tgt_esp, ADDRINT size )
 {
    assert (size == sizeof (ADDRINT));
 
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
    
    if (core)
    {
@@ -694,7 +701,7 @@ ADDRINT completePushf ( ADDRINT esp, ADDRINT size )
 {
    assert (size == sizeof(ADDRINT));
    
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
 
    if (core)
    {
@@ -710,7 +717,7 @@ ADDRINT redirectPopf (ADDRINT tgt_esp, ADDRINT size)
 {
    assert (size == sizeof (ADDRINT));
 
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
   
    if (core)
    {
@@ -726,7 +733,7 @@ ADDRINT completePopf (ADDRINT esp, ADDRINT size)
 {
    assert (size == sizeof (ADDRINT));
    
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
 
    if (core)
    {
@@ -745,7 +752,7 @@ ADDRINT completePopf (ADDRINT esp, ADDRINT size)
 
 ADDRINT redirectMemOp (bool has_lock_prefix, ADDRINT tgt_ea, ADDRINT size, PinMemoryManager::AccessType access_type)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
   
    if (core)
    {
@@ -765,9 +772,20 @@ ADDRINT redirectMemOp (bool has_lock_prefix, ADDRINT tgt_ea, ADDRINT size, PinMe
    }
 }
 
+ADDRINT redirectMemOpAndCaptureEa (bool has_lock_prefix, ADDRINT tgt_ea, ADDRINT size, PinMemoryManager::AccessType access_type, ADDRINT *ea_out)
+{
+   *ea_out = tgt_ea;
+   return redirectMemOp(has_lock_prefix, tgt_ea, size, access_type);
+}
+
+ADDRINT captureWriteEa (ADDRINT tgt_ea)
+{
+   return tgt_ea;
+}
+
 VOID completeMemWrite (bool has_lock_prefix, ADDRINT tgt_ea, ADDRINT size, PinMemoryManager::AccessType access_type)
 {
-   Core *core = Sim()->getCoreManager()->getCurrentCore();
+   Core *core = Sim()->getTileManager()->getCurrentCore();
 
    if (core)
    {

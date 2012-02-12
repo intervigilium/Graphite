@@ -36,11 +36,9 @@ class NetworkModelEClos : public NetworkModel
 
       void outputSummary(ostream& out);
 
-      void enable() { _enabled = true; }
-      void disable() { _enabled = false; }
       void reset() {}
 
-      static pair<bool,SInt32> computeCoreCountConstraints(SInt32 core_count);
+      static pair<bool,SInt32> computeTileCountConstraints(SInt32 tile_count);
 
    private:
       class EClosNode
@@ -92,7 +90,7 @@ class NetworkModelEClos : public NetworkModel
       SInt32 _n;
       SInt32 _r;
 
-      vector<vector<core_id_t> > _eclos_router_to_core_mapping;
+      vector<vector<tile_id_t> > _eclos_router_to_tile_mapping;
       vector<EClosNode*> _eclos_node_list;
 
       volatile float _frequency;
@@ -101,15 +99,7 @@ class NetworkModelEClos : public NetworkModel
       UInt64 _router_delay;
       UInt64 _link_delay;
 
-      bool _enabled;
-
       Lock _lock;
-
-      // Performance Counters
-      UInt64 _total_packets_received;
-      UInt64 _total_bytes_received;
-      UInt64 _total_contention_delay;
-      UInt64 _total_packet_delay;
 
       // Rand Data Buffer
       drand48_data _rand_data_buffer;
@@ -119,7 +109,10 @@ class NetworkModelEClos : public NetworkModel
       static void readTopologyParams(SInt32& m, SInt32& n, SInt32& r);
       SInt32 getRandNum(SInt32 start, SInt32 end);
       SInt32 computeProcessingTime(SInt32 pkt_length);
-      bool isApplicationCore(core_id_t core_id);
+      bool isApplicationTile(tile_id_t tile_id);
       pair<bool,bool> isModeled(const NetPacket& pkt);
       string getName(Stage stage);
+
+      // Flit Width
+      UInt32 getFlitWidth() { return _flit_width; }
 };

@@ -5,6 +5,7 @@
 
 #include "clock_skew_minimization_object.h"
 #include "core.h"
+#include "tile.h"
 #include "lock.h"
 #include "cond.h"
 #include "fixed_types.h"
